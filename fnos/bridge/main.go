@@ -49,13 +49,18 @@ func loadConfig() (config, error) {
 		{"BRIDGE_UPSTREAM", &c.upstream},
 		{"BRIDGE_PREFIX", &c.prefix},
 		{"BRIDGE_COOKIE_NAME", &c.cookieName},
-		{"BRIDGE_AUTH_HEADER", &c.authHeader},
 	} {
 		v := os.Getenv(e.name)
 		if v == "" {
 			return c, fmt.Errorf("bridge: %s is required", e.name)
 		}
 		*e.dst = v
+	}
+	// The fnOS gateway names the authenticated user in this header; a
+	// deployment may override it, but this is the documented default.
+	c.authHeader = os.Getenv("BRIDGE_AUTH_HEADER")
+	if c.authHeader == "" {
+		c.authHeader = "X-Trim-Userid"
 	}
 	// The web key comes in as MAGPIE_WEB_KEY or BRIDGE_COOKIE_VALUE (the
 	// magpie container sources the same key file); when neither is set, the
@@ -284,10 +289,10 @@ func serve(socket string, handler http.Handler) error {
 	if filepath.Dir(socket) == "" {
 		return errors.New("bridge: bad socket path")
 	}
-	if fi, err := os.Stat(socket); err == nil && fi.Mode()&os.ModeSocket != 0 {
-		if err := os.Remove(socket); err != nil {
-			return fmt.Errorf("bridge: remove stale socket: %w", err)
-		}
+	// A leftover file or socket at the path would fail the listen; the
+	// bridge owns this path (it lives inside the app's own directory).
+	if err := os.Remove(socket); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("bridge: remove stale socket: %w", err)
 	}
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
