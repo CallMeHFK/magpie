@@ -110,3 +110,10 @@ This magpie-side code still runs for moved subscriptions:
 
 The parity tests, `internal/gateway/plugin_*_test.go`, hold each plugin to
 what its built-in did.
+
+## fnOS packaging overlay (this fork only)
+
+Upstream sections above apply to magpie's own code. For the fnOS app
+packaging (`fnos/` — bridge, fpk, sync and release automation), follow the
+project overlay in [fnos/AGENTS.md](fnos/AGENTS.md), which layers the
+shared agent rules from CallMeHFK/open-source-repo-rules on top.

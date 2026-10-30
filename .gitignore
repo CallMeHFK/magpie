@@ -7,3 +7,13 @@
 /magpie-dev-backend
 /magpie-dev.new
 /internal/update/launcher-*.com
+
+# fnOS packaging (see fnos/AGENTS.md): local artifacts and secrets
+fnos/app/magpie.fpk
+fnos/app/app/docker/.env
+fnos/bridge/bridge
+fnos/bridge/bridge.exe
+
+# agent tool state
+.mimosa/
+

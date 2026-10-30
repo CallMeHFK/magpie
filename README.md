@@ -315,3 +315,11 @@ If magpie saved you from editing one more config file, **a ⭐ helps others find
 [MIT](LICENSE)
 
 magpie is not affiliated with [Apache Magpie](https://magpie.apache.org) or the [Apache Software Foundation](https://apache.org).
+
+## fnOS (飞牛) packaging — this fork
+
+This fork adds an app package for [飞牛 fnOS](https://www.fnnas.com): install
+it from the app center, manage magpie from the fnOS desktop, and reach the
+gateway from the 飞牛 mobile App anywhere via 飞牛 Connect. No upstream code
+is changed — see [FNOS.md](FNOS.md) for the architecture, install steps and
+agent configuration, and the `fnos-vX.Y.Z` releases for the `.fpk`.
