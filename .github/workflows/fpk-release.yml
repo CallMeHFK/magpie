@@ -48,6 +48,11 @@ jobs:
         if: steps.ver.outputs.exists == 'true'
         run: echo "release ${{ steps.ver.outputs.tag }} already exists - nothing to do"
 
+      - name: Lowercase the image owner (ghcr requires lowercase)
+        if: steps.ver.outputs.exists == 'false'
+        id: owner
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >>"$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@v3
         if: steps.ver.outputs.exists == 'false'
       - uses: docker/setup-buildx-action@v3
@@ -67,7 +72,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/${{ github.repository_owner }}/magpie-fnos:${{ steps.ver.outputs.version }}
+          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos:${{ steps.ver.outputs.version }}
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
 
@@ -79,7 +84,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/${{ github.repository_owner }}/magpie-fnos-bridge:${{ steps.ver.outputs.version }}
+          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos-bridge:${{ steps.ver.outputs.version }}
 
       - name: Build the FPK
         if: steps.ver.outputs.exists == 'false'
