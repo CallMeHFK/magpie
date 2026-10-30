@@ -64,14 +64,17 @@ jobs:
         env:
           OWNER: ${{ steps.owner.outputs.owner }}
           VERSION: ${{ steps.ver.outputs.upstream }}
+          FPK_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -eu
           tok="$(curl -fsS "https://ghcr.io/token?scope=repository:${OWNER}/magpie-fnos:pull&scope=repository:${OWNER}/magpie-fnos-bridge:pull" | jq -r .token)"
           ok=1
-          for repo in magpie-fnos magpie-fnos-bridge; do
-            curl -fsS -H "Authorization: Bearer $tok" "https://ghcr.io/v2/${OWNER}/${repo}/tags/list" \
-              | jq -e --arg v "$VERSION" '.tags | index($v)' >/dev/null || ok=0
-          done
+          # the magpie image follows the upstream version, the bridge the
+          # fpk version (packaging revisions ship bridge fixes)
+          curl -fsS -H "Authorization: Bearer $tok" "https://ghcr.io/v2/${OWNER}/magpie-fnos/tags/list" \
+            | jq -e --arg v "$VERSION" '.tags | index($v)' >/dev/null || ok=0
+          curl -fsS -H "Authorization: Bearer $tok" "https://ghcr.io/v2/${OWNER}/magpie-fnos-bridge/tags/list" \
+            | jq -e --arg v "$FPK_VERSION" '.tags | index($v)' >/dev/null || ok=0
           echo "exist=$ok" >>"$GITHUB_OUTPUT"
           echo "images already published: $ok"
 
@@ -106,7 +109,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos-bridge:${{ steps.ver.outputs.upstream }}
+          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos-bridge:${{ steps.ver.outputs.version }}
 
       - name: Build the FPK
         if: steps.ver.outputs.exists == 'false'

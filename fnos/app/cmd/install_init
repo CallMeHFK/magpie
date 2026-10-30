@@ -1,12 +1,5 @@
 #!/bin/bash
-# Runs before the app files install. The app target directory is not
-# populated yet, so this only prepares a key when the target happens to
-# exist already (a reinstall over kept files); the real generation happens
-# in cmd/install_callback once ${TRIM_APPDEST} is populated. Never fails
-# the install: any problem here is the callback's to fix.
-KEY_FILE="${TRIM_APPDEST:-/var/apps/magpie/target}/app/docker/magpie.env"
-if [ -d "${KEY_FILE%/*}" ] && [ ! -s "$KEY_FILE" ]; then
-	KEY="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-	echo "MAGPIE_WEB_KEY=${KEY}" >"$KEY_FILE" 2>/dev/null && chmod 600 "$KEY_FILE" 2>/dev/null
-fi
+# Runs before the app files install. Nothing to do yet: the target
+# directory is not populated, and the key file is generated once the files
+# land (cmd/install_callback). Kept as a marker for the lifecycle.
 exit 0

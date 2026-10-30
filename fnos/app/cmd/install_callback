@@ -1,24 +1,5 @@
 #!/bin/bash
-# Runs after the app files land in ${TRIM_APPDEST}. Generates the magpie
-# web key next to the compose file, which reads it via env_file. The file
-# sits inside the package directory, so an upgrade replaces it;
-# cmd/upgrade_callback restores it (a new key then asks browsers to sign
-# in once more). Idempotent: an existing key is kept.
-set -eu
-
-KEY_FILE="${TRIM_APPDEST}/app/docker/magpie.env"
-
-generate_key() {
-	# 32 hex chars; magpie's CheckWebKey takes letters, digits and - . _ ~
-	if command -v openssl >/dev/null 2>&1; then
-		openssl rand -hex 16
-	else
-		head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'
-	fi
-}
-
-if [ ! -s "$KEY_FILE" ]; then
-	KEY="$(generate_key)"
-	echo "MAGPIE_WEB_KEY=${KEY}" >"$KEY_FILE"
-	chmod 600 "$KEY_FILE"
-fi
+# Runs after the app files land in the app target. Nothing to do here: the
+# magpie web key is negotiated between the containers at start (see the
+# compose file), and no host-side secrets are kept.
+exit 0

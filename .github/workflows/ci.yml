@@ -23,7 +23,7 @@ jobs:
       - name: vet
         run: cd fnos/bridge && go vet ./...
       - name: shellcheck
-        run: shellcheck fnos/app/cmd/main fnos/app/cmd/install_callback fnos/app/cmd/upgrade_callback
+        run: cd fnos/app/cmd && shellcheck -x main install_callback upgrade_callback
 
   test:
     name: test

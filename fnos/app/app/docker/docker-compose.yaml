@@ -1,9 +1,12 @@
 # magpie fnOS app. fnOS runs this compose file from the docker-project
 # resource; ${TRIM_APPDEST} (the install target) is provided by fnOS.
-# MAGPIE_WEB_KEY lives in ${TRIM_APPDEST}/app/docker/magpie.env, generated
-# by cmd/install_callback after the files land (and restored by
-# cmd/upgrade_callback after an upgrade replaces the package files); both
-# containers read it via env_file.
+#
+# The magpie web key is negotiated between the containers at start: the
+# bridge (root, writable mount) reads or generates /sock/magpie.env, and
+# the magpie container's entrypoint waits for that file and sources it.
+# No key material lives in the package or the compose file; the file sits
+# in the app's own directory (wiped by an upgrade, regenerated at the next
+# container start - browsers then sign in once more).
 #
 # Network posture: neither container publishes a port. The only way in is
 # the fnOS unified gateway -> /var/apps/magpie/target/app.sock -> bridge ->
@@ -17,8 +20,23 @@ services:
     environment:
       MAGPIE_ADDR: 0.0.0.0:3425
       MAGPIE_TRUST_PROXY: "1"
-    env_file:
-      - ${TRIM_APPDEST}/app/docker/magpie.env
+    volumes:
+      # read-only: the magpie container (nonroot) only reads the key file
+      - ${TRIM_APPDEST}:/sock:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        i=0
+        while [ ! -s /sock/magpie.env ] && [ "$$i" -lt 120 ]; do
+          sleep 1
+          i=$$((i + 1))
+        done
+        if [ -s /sock/magpie.env ]; then
+          . /sock/magpie.env
+          export MAGPIE_WEB_KEY
+        fi
+        exec /magpie serve --web=0.0.0.0:3430
 
   bridge:
     image: ghcr.io/callmehfk/magpie-fnos-bridge:0.1.2242
@@ -31,12 +49,12 @@ services:
       BRIDGE_UPSTREAM: http://magpie:3430
       BRIDGE_PREFIX: /app/magpie
       BRIDGE_COOKIE_NAME: magpie_web_3430
+      BRIDGE_KEY_FILE: /sock/magpie.env
       BRIDGE_FETCH_SHIM: "1"
-    env_file:
-      - ${TRIM_APPDEST}/app/docker/magpie.env
     volumes:
       # The fnOS gateway connects to <target>/app.sock; the bridge (as the
-      # container's root, matching the host-owned install dir) creates it
-      # here. Unauthenticated socket clients only reach magpie's own
-      # sign-in page - the key cookie is injected for fnOS sessions alone.
+      # container's root, matching the host-owned install dir) creates both
+      # the socket and the key file here. Unauthenticated socket clients
+      # only reach magpie's own sign-in page - the key cookie is injected
+      # for fnOS sessions alone.
       - ${TRIM_APPDEST}:/sock

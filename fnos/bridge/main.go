@@ -13,6 +13,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -55,14 +57,27 @@ func loadConfig() (config, error) {
 		}
 		*e.dst = v
 	}
-	// The web key comes in as MAGPIE_WEB_KEY (the same env_file the magpie
-	// container reads); BRIDGE_COOKIE_VALUE overrides it for standalone use.
+	// The web key comes in as MAGPIE_WEB_KEY or BRIDGE_COOKIE_VALUE (the
+	// magpie container sources the same key file); when neither is set, the
+	// bridge adopts BRIDGE_KEY_FILE: it reads the file, or generates it, so
+	// the magpie side (whose entrypoint waits for the file) serves with the
+	// very same key. Without any key the bridge still runs - it just stops
+	// injecting the cookie, and magpie web asks visitors for its key.
 	c.cookieValue = os.Getenv("BRIDGE_COOKIE_VALUE")
 	if c.cookieValue == "" {
 		c.cookieValue = os.Getenv("MAGPIE_WEB_KEY")
 	}
 	if c.cookieValue == "" {
-		return c, fmt.Errorf("bridge: BRIDGE_COOKIE_VALUE or MAGPIE_WEB_KEY is required")
+		if f := os.Getenv("BRIDGE_KEY_FILE"); f != "" {
+			if v, err := adoptKeyFile(f); err != nil {
+				log.Printf("bridge: key file %s: %v (continuing without cookie injection)", f, err)
+			} else if v != "" {
+				c.cookieValue = v
+			}
+		}
+	}
+	if c.cookieValue != "" && len(c.cookieValue) < 16 {
+		return c, fmt.Errorf("bridge: the web key is shorter than 16 characters")
 	}
 	// The upstream is operator configuration, not request data: accept only
 	// plain http or https, never a file/gopher/etc scheme, and refuse
@@ -83,11 +98,47 @@ func loadConfig() (config, error) {
 	if !strings.HasPrefix(c.prefix, "/app/") || strings.HasSuffix(c.prefix, "/") {
 		return c, fmt.Errorf("bridge: BRIDGE_PREFIX must be /app/<appname>, got %q", c.prefix)
 	}
-	if len(c.cookieValue) < 16 {
-		return c, fmt.Errorf("bridge: BRIDGE_COOKIE_VALUE too short (min 16)")
-	}
 	c.shimEnabled = os.Getenv("BRIDGE_FETCH_SHIM") == "1"
 	return c, nil
+}
+
+// adoptKeyFile reads a KEY=VALUE env file and returns MAGPIE_WEB_KEY from
+// it; when the file is missing it is created with a fresh random key (the
+// file lives on the app's own directory, which the fnOS gateway host
+// already access-controls; 0644 so the nonroot magpie container can read
+// it through the shared mount).
+func adoptKeyFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		key, err := newKey()
+		if err != nil {
+			return "", err
+		}
+		content := "MAGPIE_WEB_KEY=" + key + "\n"
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return "", err
+		}
+		log.Printf("bridge: generated a new web key in %s", path)
+		return key, nil
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "MAGPIE_WEB_KEY="); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v), nil
+		}
+	}
+	return "", errors.New("no MAGPIE_WEB_KEY line")
+}
+
+func newKey() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // fetchShim rewrites the page's root-absolute fetch URLs ("/api/…", "/v1/…")
