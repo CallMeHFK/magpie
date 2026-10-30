@@ -105,6 +105,12 @@ jobs:
           notes="magpie fnOS package tracking [yetone/magpie v$VERSION](https://github.com/yetone/magpie/releases/tag/v$VERSION).
 
           Install: fnOS 应用中心 → 手动安装 → magpie.fpk. See FNOS.md for architecture, Connect access and agent configuration."
-          gh release create "$TAG" --verify-tag --target "$GITHUB_SHA" \
+          git config user.name "magpie-fnos-release"
+          git config user.email "actions@users.noreply.github.com"
+          # annotated tag first (release rules: never lightweight), then
+          # the release from it
+          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          git push origin "$TAG"
+          gh release create "$TAG" --verify-tag \
             --title "$TAG" --notes "$notes" \
             fnos/app/magpie.fpk
