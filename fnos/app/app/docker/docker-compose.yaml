@@ -49,6 +49,7 @@ services:
       BRIDGE_UPSTREAM: http://magpie:3430
       BRIDGE_PREFIX: /app/magpie
       BRIDGE_COOKIE_NAME: magpie_web_3430
+      BRIDGE_AUTH_HEADER: X-Trim-Userid
       BRIDGE_KEY_FILE: /sock/magpie.env
       BRIDGE_FETCH_SHIM: "1"
     volumes:
