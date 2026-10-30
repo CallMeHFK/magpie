@@ -29,16 +29,21 @@ jobs:
         id: ver
         run: |
           set -eu
-          ver="$(cat fnos/UPSTREAM_VERSION | tr -d '[:space:]')"
+          upstream="$(cat fnos/UPSTREAM_VERSION | tr -d '[:space:]')"
+          ver="$(grep -E '^version=' fnos/app/manifest | head -1 | cut -d= -f2 | tr -d '"' | tr -d '[:space:]')"
+          case "$ver" in
+            "$upstream"|"$upstream"-*) : ;;
+            *) echo "::error::manifest version $ver does not track upstream $upstream"; exit 1 ;;
+          esac
+          grep -q "magpie-fnos:$upstream" fnos/app/app/docker/docker-compose.yaml \
+            || { echo "::error::compose does not pin the upstream image tag $upstream"; exit 1; }
           tag="fnos-v$ver"
-          for f in fnos/app/app/docker/docker-compose.yaml fnos/app/manifest; do
-            grep -q "$ver" "$f" || { echo "::error::$f does not carry version $ver"; exit 1; }
-          done
           if gh release view "$tag" --json name --jq .name >/dev/null 2>&1; then
             echo "exists=true" >>"$GITHUB_OUTPUT"
           else
             echo "exists=false" >>"$GITHUB_OUTPUT"
           fi
+          echo "upstream=$upstream" >>"$GITHUB_OUTPUT"
           echo "version=$ver" >>"$GITHUB_OUTPUT"
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
         env:
@@ -58,7 +63,7 @@ jobs:
         if: steps.ver.outputs.exists == 'false'
         env:
           OWNER: ${{ steps.owner.outputs.owner }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ steps.ver.outputs.upstream }}
         run: |
           set -eu
           tok="$(curl -fsS "https://ghcr.io/token?scope=repository:${OWNER}/magpie-fnos:pull&scope=repository:${OWNER}/magpie-fnos-bridge:pull" | jq -r .token)"
@@ -89,9 +94,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos:${{ steps.ver.outputs.version }}
+          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos:${{ steps.ver.outputs.upstream }}
           build-args: |
-            VERSION=${{ steps.ver.outputs.version }}
+            VERSION=${{ steps.ver.outputs.upstream }}
 
       - name: Build and push bridge image
         if: steps.ver.outputs.exists == 'false' && steps.images.outputs.exist != '1'
@@ -101,7 +106,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos-bridge:${{ steps.ver.outputs.version }}
+          tags: ghcr.io/${{ steps.owner.outputs.owner }}/magpie-fnos-bridge:${{ steps.ver.outputs.upstream }}
 
       - name: Build the FPK
         if: steps.ver.outputs.exists == 'false'
@@ -115,11 +120,11 @@ jobs:
         if: steps.ver.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          UPSTREAM: ${{ steps.ver.outputs.upstream }}
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -eu
-          notes="magpie fnOS package tracking [yetone/magpie v$VERSION](https://github.com/yetone/magpie/releases/tag/v$VERSION).
+          notes="magpie fnOS package tracking [yetone/magpie v$UPSTREAM](https://github.com/yetone/magpie/releases/tag/v$UPSTREAM).
 
           Install: fnOS 应用中心 → 手动安装 → magpie.fpk. See FNOS.md for architecture, Connect access and agent configuration."
           git config user.name "magpie-fnos-release"
