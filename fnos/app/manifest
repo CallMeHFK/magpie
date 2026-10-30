@@ -1,5 +1,5 @@
 appname=magpie
-version=0.1.2242-2
+version=0.1.2242-3
 display_name=Magpie
 desc=<b>Magpie</b> — 让 Claude Code、Codex、Gemini CLI 等编码代理使用任意模型：一个本地 AI 网关统一 OpenAI / Anthropic / Gemini API，支持多账号路由与故障转移。本包通过 fnOS 统一网关集成，安装后可从 fnOS 桌面与手机 App（经飞牛 Connect）访问 Web 控制台与 AI 网关 API。
 source=thirdparty

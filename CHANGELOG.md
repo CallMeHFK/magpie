@@ -4,6 +4,19 @@ All notable changes to the fnOS packaging in this fork. Upstream magpie
 changes are not duplicated here; each `fnos-vX.Y.Z` release names the
 upstream version it packages (see AGENTS/fnos release protocol).
 
+## [0.1.2242-3] - 2026-10-31
+
+### Fixed
+
+- The web key file now lives inside the install target
+  (`${TRIM_APPDEST}/app/docker/magpie.env`), the one location every stage
+  of the real install flow demonstrably provides: `TRIM_PKGVAR` proved
+  unavailable to the install scripts on a live device, which failed the
+  install ("执行应用初始化脚本异常"). `install_init` degrades to a no-op
+  when the target is not populated yet; `install_callback` generates the
+  key, and `upgrade_callback` regenerates it after upgrades replace the
+  package files.
+
 ## [0.1.2242-2] - 2026-10-31
 
 ### Fixed

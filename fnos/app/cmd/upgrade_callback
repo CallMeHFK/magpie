@@ -1,13 +1,11 @@
 #!/bin/bash
-# Runs after the app files are replaced by an upgrade. The key file lives in
-# the app data directory and survives untouched; make sure it is there (an
-# upgrade from a very old packaging may not have it), then pull the pinned
-# images so the restart after the upgrade serves the new version.
+# Runs after an upgrade replaced the app files. The upgrade wiped the key
+# file that lives inside the package directory; regenerate it (browsers
+# then sign in to magpie web once more), and pull the pinned images so the
+# restart after the upgrade serves the new version.
 set -eu
 
-KEY_FILE="${TRIM_PKGVAR}/magpie.env"
-
-mkdir -p "${TRIM_PKGVAR}"
+KEY_FILE="${TRIM_APPDEST}/app/docker/magpie.env"
 
 if [ ! -s "$KEY_FILE" ]; then
 	KEY="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"

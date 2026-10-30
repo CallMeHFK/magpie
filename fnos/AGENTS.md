@@ -62,9 +62,10 @@ notes, `CHANGELOG.md` records fork-side changes only.
 
 ## Secrets and privacy
 
-- `MAGPIE_WEB_KEY` is device-generated at install (`cmd/install_init`,
+- `MAGPIE_WEB_KEY` is device-generated at install (`cmd/install_callback`,
   backstopped by the other lifecycle callbacks) into
-  `${TRIM_PKGVAR}/magpie.env`, which the compose file reads via `env_file`.
+  `${TRIM_APPDEST}/app/docker/magpie.env`, which the compose file reads via
+  `env_file`; upgrades regenerate it.
   Never commit the file; `.gitignore` covers the local forms, and the
   pre-commit screen in the shared commit rules runs before every commit.
 - No real device hostnames, usernames, LAN IPs or tokens in the repo —
