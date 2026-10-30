@@ -1,0 +1,25 @@
+#!/bin/bash
+# Runs after the app files are replaced by an upgrade. The upgrade wiped the
+# compose-side .env; restore it from the app-conf copy (regenerating if the
+# conf copy is gone too), then pull the pinned images so the restart after
+# the upgrade serves the new version.
+set -eu
+
+KEY_FILE="${TRIM_PKGETC}/magpie.env"
+ENV_FILE="${TRIM_APPDEST}/app/docker/.env"
+
+mkdir -p "${TRIM_PKGETC}" "${TRIM_APPDEST}/app/docker"
+
+if [ ! -s "$KEY_FILE" ]; then
+	KEY="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+	{
+		echo "MAGPIE_WEB_KEY=${KEY}"
+	} >"$KEY_FILE"
+	chmod 600 "$KEY_FILE"
+fi
+
+cp -f "$KEY_FILE" "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+
+# Best effort: the pinned image tags changed with the upgrade.
+docker compose -f "${TRIM_APPDEST}/app/docker/docker-compose.yaml" pull --ignore-pull-failures || true

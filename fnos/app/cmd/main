@@ -1,0 +1,31 @@
+#!/bin/bash
+# magpie fnOS app lifecycle. Compose start/stop is driven by fnOS from the
+# docker-project resource; this script only reports status.
+set -u
+
+CONTAINER_NAME="magpie-app"
+
+is_running() {
+	docker inspect "$CONTAINER_NAME" 2>/dev/null | grep -q '"Status": "running"'
+}
+
+case "$1" in
+start)
+	# fnOS starts the compose project from config/resource.
+	exit 0
+	;;
+stop)
+	# fnOS stops it; no extra work here.
+	exit 0
+	;;
+status)
+	if is_running; then
+		exit 0
+	fi
+	exit 3
+	;;
+*)
+	echo "Unknown command: $1" >"$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+	exit 1
+	;;
+esac

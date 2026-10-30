@@ -1,0 +1,38 @@
+# magpie fnOS app. fnOS runs this compose file from the docker-project
+# resource; ${TRIM_*} are provided by fnOS, ${MAGPIE_WEB_KEY} comes from the
+# .env file next to this file, written by cmd/install_callback (and restored
+# by cmd/upgrade_callback after the upgrade replaced the app files).
+#
+# Network posture: neither container publishes a port. The only way in is
+# the fnOS unified gateway -> /var/apps/magpie/target/app.sock -> bridge ->
+# magpie web's one-port server (page, /api/* and the /v1,/v1beta,/mcp
+# gateway routes).
+services:
+  magpie:
+    image: ghcr.io/callmehfk/magpie-fnos:0.1.2242
+    container_name: magpie-app
+    restart: unless-stopped
+    environment:
+      MAGPIE_ADDR: 0.0.0.0:3425
+      MAGPIE_TRUST_PROXY: "1"
+      MAGPIE_WEB_KEY: ${MAGPIE_WEB_KEY:?MAGPIE_WEB_KEY missing - run cmd/install_callback first}
+
+  bridge:
+    image: ghcr.io/callmehfk/magpie-fnos-bridge:0.1.2242
+    container_name: magpie-bridge
+    restart: unless-stopped
+    depends_on:
+      - magpie
+    environment:
+      BRIDGE_SOCKET: /sock/app.sock
+      BRIDGE_UPSTREAM: http://magpie:3430
+      BRIDGE_PREFIX: /app/magpie
+      BRIDGE_COOKIE_NAME: magpie_web_3430
+      BRIDGE_COOKIE_VALUE: ${MAGPIE_WEB_KEY:?MAGPIE_WEB_KEY missing - run cmd/install_callback first}
+      BRIDGE_FETCH_SHIM: "1"
+    volumes:
+      # The fnOS gateway connects to <target>/app.sock; the bridge (as the
+      # container's root, matching the host-owned install dir) creates it
+      # here. Unauthenticated socket clients only reach magpie's own
+      # sign-in page - the key cookie is injected for fnOS sessions alone.
+      - ${TRIM_APPDEST}:/sock

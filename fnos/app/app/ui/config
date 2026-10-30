@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "magpie.main": {
+      "title": "Magpie",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "gatewayPrefix": "/app/magpie",
+      "gatewaySocket": "app.sock",
+      "url": "/app/magpie",
+      "allUsers": true
+    }
+  }
+}
