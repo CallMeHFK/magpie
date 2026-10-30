@@ -57,7 +57,7 @@ Works the same on the LAN: `https://<device>/app/magpie/v1`.
 | `fnos/app/manifest` | fnOS app metadata; version tracks upstream |
 | `fnos/app/app/docker/docker-compose.yaml` | magpie + bridge, no published ports |
 | `fnos/app/cmd/main` | status reporting (`magpie-app` container) |
-| `fnos/app/cmd/install_callback` | generates `MAGPIE_WEB_KEY` into app conf |
+| `fnos/app/cmd/install_init` | generates `MAGPIE_WEB_KEY` into the app data dir before compose ever runs |
 | `fnos/app/cmd/upgrade_callback` | restores the key file, pulls pinned images |
 | `fnos/bridge/` | the gateway adapter (Go, stdlib only) |
 
