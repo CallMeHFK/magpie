@@ -50,4 +50,9 @@ jobs:
       - name: build fpk
         run: cd fnos/app && "$GITHUB_WORKSPACE/fnpack" build
       - name: verify fpk layout
-        run: test -f fnos/app/magpie.fpk && unzip -l fnos/app/magpie.fpk | grep -E "manifest|docker-compose.yaml|cmd/main"
+        run: |
+          test -f fnos/app/magpie.fpk
+          # an .fpk is a gzip stream; the layout must carry manifest,
+          # lifecycle scripts and the compose project inside app.tgz
+          tar -tzf fnos/app/magpie.fpk | grep -E "^manifest$|^cmd/main$|^config/privilege$|^ICON.PNG$"
+          tar -tzf fnos/app/magpie.fpk | grep -E "docker-compose.yaml"
