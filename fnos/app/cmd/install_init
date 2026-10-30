@@ -1,0 +1,4 @@
+#!/bin/bash
+# Lifecycle no-op: fnpack requires the full script set; the packaging has
+# nothing to do in this phase.
+exit 0
