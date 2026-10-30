@@ -1,0 +1,53 @@
+name: CI
+
+# Fast required checks for the fnOS packaging. Upstream's own workflows
+# (test.yml, docker.yml) still run as they are; they are advisory here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: fnos/bridge/go.mod
+      - name: vet
+        run: cd fnos/bridge && go vet ./...
+      - name: shellcheck
+        run: shellcheck fnos/app/cmd/main fnos/app/cmd/install_callback fnos/app/cmd/upgrade_callback
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: fnos/bridge/go.mod
+      - name: go test
+        run: cd fnos/bridge && go test ./...
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: install fnpack
+        run: |
+          curl -fsSL -o fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x fnpack
+          ./fnpack --help >/dev/null
+      - name: build fpk
+        run: cd fnos/app && "$GITHUB_WORKSPACE/fnpack" build
+      - name: verify fpk layout
+        run: test -f fnos/app/magpie.fpk && unzip -l fnos/app/magpie.fpk | grep -E "manifest|docker-compose.yaml|cmd/main"

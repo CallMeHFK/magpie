@@ -1,0 +1,102 @@
+name: Upstream sync
+
+# Tracks upstream release tags: merges the newest v* tag from
+# yetone/magpie into main, bumps fnos/UPSTREAM_VERSION and the compose
+# image tags, opens a PR that self-merges once CI is green, and the FPK
+# release workflow then publishes the new package.
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find the newest upstream tag
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tracked="$(cat fnos/UPSTREAM_VERSION | tr -d '[:space:]')"
+          echo "tracked: $tracked"
+          newest="$(gh api 'repos/yetone/magpie/tags?per_page=50' --jq '.[].name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -t. -k1,1n -k2,2n -k3,3n \
+            | tail -1)"
+          echo "newest upstream tag: ${newest:-none}"
+          if [ -z "$newest" ]; then
+            echo "skip=true" >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          latest="${newest#v}"
+          if [ "$latest" = "$tracked" ]; then
+            echo "skip=true" >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          # higher semantic version wins; a lower or equal one does not
+          if [ "$(printf '%s\n%s\n' "$latest" "$tracked" | sort -V | tail -1)" != "$latest" ]; then
+            echo "skip=true" >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "skip=false" >>"$GITHUB_OUTPUT"
+          echo "tag=$newest" >>"$GITHUB_OUTPUT"
+          echo "version=$latest" >>"$GITHUB_OUTPUT"
+
+      - name: Merge upstream tag into a sync branch
+        if: steps.upstream.outputs.skip == 'false'
+        id: merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          tag="${{ steps.upstream.outputs.tag }}"
+          ver="${{ steps.upstream.outputs.version }}"
+          git config user.name "magpie-fnos-sync"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream https://github.com/yetone/magpie.git
+          git fetch upstream "refs/tags/$tag:refs/tags/$tag" --no-tags
+          branch="fnos/sync-$tag"
+          git checkout -B "$branch" origin/main
+          if ! git merge --no-edit "$tag" -m "chore(fnos): track upstream $tag"; then
+            echo "::error::merge conflict with $tag - resolve manually on $branch"
+            git merge --abort || true
+            exit 1
+          fi
+          echo "$ver" > fnos/UPSTREAM_VERSION
+          sed -i "s#ghcr.io/callmehfk/magpie-fnos:[0-9.]*#ghcr.io/callmehfk/magpie-fnos:$ver#" \
+            fnos/app/app/docker/docker-compose.yaml
+          sed -i "s#ghcr.io/callmehfk/magpie-fnos-bridge:[0-9.]*#ghcr.io/callmehfk/magpie-fnos-bridge:$ver#" \
+            fnos/app/app/docker/docker-compose.yaml
+          sed -i "s#^version=.*#version=$ver#" fnos/app/manifest
+          sed -i "s#跟随上游 yetone/magpie v[0-9.]*#跟随上游 yetone/magpie $tag#" fnos/app/manifest
+          git add fnos/UPSTREAM_VERSION fnos/app/app/docker/docker-compose.yaml fnos/app/manifest
+          if git diff --cached --quiet; then
+            echo "::error::nothing changed after version bump for $tag"
+            exit 1
+          fi
+          git commit -m "chore(fnos): track upstream $tag"
+          git push origin "$branch"
+
+      - name: Open and arm the sync PR
+        if: steps.upstream.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          tag="${{ steps.upstream.outputs.tag }}"
+          branch="fnos/sync-$tag"
+          if gh pr list --head "$branch" --state open --json number --jq 'length' | grep -q '^1$'; then
+            echo "PR for $branch already open"
+          else
+            gh pr create --head "$branch" --base main \
+              --title "chore(fnos): track upstream $tag" \
+              --body "Automated upstream sync to [$tag](https://github.com/yetone/magpie/releases/tag/$tag). CI green merges this; fpk-release then publishes \`fnos-$tag\`."
+          fi
+          gh pr merge --auto --squash "$branch"
