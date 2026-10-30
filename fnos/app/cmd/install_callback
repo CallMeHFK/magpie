@@ -1,12 +1,15 @@
 #!/bin/bash
-# Runs after the app files land in ${TRIM_APPDEST}. The key file already
-# exists (cmd/install_init generated it before the install); this is the
-# idempotent backstop for reinstalls where the data dir was kept.
+# Runs after the app files land in ${TRIM_APPDEST}. Generates the magpie
+# web key next to the compose file, which reads it via env_file. The file
+# sits inside the package directory, so an upgrade replaces it;
+# cmd/upgrade_callback restores it (a new key then asks browsers to sign
+# in once more). Idempotent: an existing key is kept.
 set -eu
 
-KEY_FILE="${TRIM_PKGVAR}/magpie.env"
+KEY_FILE="${TRIM_APPDEST}/app/docker/magpie.env"
 
 generate_key() {
+	# 32 hex chars; magpie's CheckWebKey takes letters, digits and - . _ ~
 	if command -v openssl >/dev/null 2>&1; then
 		openssl rand -hex 16
 	else
@@ -14,12 +17,8 @@ generate_key() {
 	fi
 }
 
-mkdir -p "${TRIM_PKGVAR}"
-
 if [ ! -s "$KEY_FILE" ]; then
 	KEY="$(generate_key)"
-	{
-		echo "MAGPIE_WEB_KEY=${KEY}"
-	} >"$KEY_FILE"
+	echo "MAGPIE_WEB_KEY=${KEY}" >"$KEY_FILE"
 	chmod 600 "$KEY_FILE"
 fi
