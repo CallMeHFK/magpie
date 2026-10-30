@@ -4,8 +4,14 @@
 # then sign in to magpie web once more), and pull the pinned images so the
 # restart after the upgrade serves the new version.
 set -eu
+. "$(dirname "$0")/common.sh"
 
-KEY_FILE="${TRIM_APPDEST}/app/docker/magpie.env"
+TARGET="$(find_target)" || {
+	logger -t magpie-app "upgrade_callback: cannot locate the app target" 2>/dev/null
+	exit 1
+}
+
+KEY_FILE="${TARGET}/app/docker/magpie.env"
 
 if [ ! -s "$KEY_FILE" ]; then
 	KEY="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -14,4 +20,4 @@ if [ ! -s "$KEY_FILE" ]; then
 fi
 
 # Best effort: the pinned image tags changed with the upgrade.
-docker compose -f "${TRIM_APPDEST}/app/docker/docker-compose.yaml" pull --ignore-pull-failures || true
+docker compose -f "${TARGET}/app/docker/docker-compose.yaml" pull --ignore-pull-failures || true

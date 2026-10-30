@@ -72,7 +72,7 @@ jobs:
           echo "$ver" > fnos/UPSTREAM_VERSION
           sed -i "s#ghcr.io/callmehfk/magpie-fnos:[0-9.]*#ghcr.io/callmehfk/magpie-fnos:$ver#" \
             fnos/app/app/docker/docker-compose.yaml
-          sed -i "s#ghcr.io/callmehfk/magpie-fnos-bridge:[0-9.]*#ghcr.io/callmehfk/magpie-fnos-bridge:$ver#" \
+          sed -i "s#ghcr.io/callmehfk/magpie-fnos-bridge:[0-9.-]*#ghcr.io/callmehfk/magpie-fnos-bridge:$ver#" \
             fnos/app/app/docker/docker-compose.yaml
           sed -i "s#^version=.*#version=$ver#" fnos/app/manifest
           sed -i "s#跟随上游 yetone/magpie v[0-9.]*#跟随上游 yetone/magpie $tag#" fnos/app/manifest
