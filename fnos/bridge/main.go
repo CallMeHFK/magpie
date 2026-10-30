@@ -47,7 +47,6 @@ func loadConfig() (config, error) {
 		{"BRIDGE_UPSTREAM", &c.upstream},
 		{"BRIDGE_PREFIX", &c.prefix},
 		{"BRIDGE_COOKIE_NAME", &c.cookieName},
-		{"BRIDGE_COOKIE_VALUE", &c.cookieValue},
 		{"BRIDGE_AUTH_HEADER", &c.authHeader},
 	} {
 		v := os.Getenv(e.name)
@@ -55,6 +54,15 @@ func loadConfig() (config, error) {
 			return c, fmt.Errorf("bridge: %s is required", e.name)
 		}
 		*e.dst = v
+	}
+	// The web key comes in as MAGPIE_WEB_KEY (the same env_file the magpie
+	// container reads); BRIDGE_COOKIE_VALUE overrides it for standalone use.
+	c.cookieValue = os.Getenv("BRIDGE_COOKIE_VALUE")
+	if c.cookieValue == "" {
+		c.cookieValue = os.Getenv("MAGPIE_WEB_KEY")
+	}
+	if c.cookieValue == "" {
+		return c, fmt.Errorf("bridge: BRIDGE_COOKIE_VALUE or MAGPIE_WEB_KEY is required")
 	}
 	// The upstream is operator configuration, not request data: accept only
 	// plain http or https, never a file/gopher/etc scheme, and refuse
