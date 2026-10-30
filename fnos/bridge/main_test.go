@@ -172,3 +172,29 @@ func TestLoadConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestCookieValueFallsBackToWebKey(t *testing.T) {
+	t.Setenv("BRIDGE_SOCKET", filepath.Join(t.TempDir(), "s.sock"))
+	t.Setenv("BRIDGE_UPSTREAM", "http://magpie:3430")
+	t.Setenv("BRIDGE_PREFIX", "/app/magpie")
+	t.Setenv("BRIDGE_COOKIE_NAME", "c")
+	t.Setenv("BRIDGE_AUTH_HEADER", "X-Trim-Userid")
+	t.Setenv("MAGPIE_WEB_KEY", "fedcba9876543210fedcba9876543210")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.cookieValue != "fedcba9876543210fedcba9876543210" {
+		t.Fatalf("cookie value: got %q, want the MAGPIE_WEB_KEY fallback", cfg.cookieValue)
+	}
+
+	t.Setenv("BRIDGE_COOKIE_VALUE", "0123456789abcdef0123456789abcdef")
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.cookieValue != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("cookie value: got %q, want the BRIDGE_COOKIE_VALUE override", cfg.cookieValue)
+	}
+}
