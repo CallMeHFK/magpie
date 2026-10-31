@@ -20,6 +20,11 @@ services:
     environment:
       MAGPIE_ADDR: 0.0.0.0:3425
       MAGPIE_TRUST_PROXY: "1"
+    ports:
+      # LAN agents reach the model gateway here with a magpie gateway key
+      # (magpie requires one for every non-loopback request); the web
+      # console stays on the fnOS gateway route only
+      - "3425:3425"
     volumes:
       # read-only: the magpie container (nonroot) only reads the key file
       - ${TRIM_APPDEST}:/sock:ro
@@ -50,6 +55,8 @@ services:
     depends_on:
       - magpie
     entrypoint: ["/bin/sh", "-c", "exec /bin/bridge-dist/bridge-$$(uname -m)"]
+    healthcheck:
+      disable: true
     environment:
       BRIDGE_SOCKET: /sock/app.sock
       BRIDGE_UPSTREAM: http://magpie:3430
