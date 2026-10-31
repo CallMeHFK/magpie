@@ -68,15 +68,18 @@ jobs:
         run: |
           set -eu
           tok="$(curl -fsS "https://ghcr.io/token?scope=repository:${OWNER}/magpie-fnos:pull&scope=repository:${OWNER}/magpie-fnos-bridge:pull" | jq -r .token)"
-          ok=1
           # the magpie image follows the upstream version, the bridge the
-          # fpk version (packaging revisions ship bridge fixes)
+          # fpk version (packaging revisions ship bridge fixes); each is
+          # built only when its own tag is missing
+          magpie_ok=1
+          bridge_ok=1
           curl -fsS -H "Authorization: Bearer $tok" "https://ghcr.io/v2/${OWNER}/magpie-fnos/tags/list" \
-            | jq -e --arg v "$VERSION" '.tags | index($v)' >/dev/null || ok=0
+            | jq -e --arg v "$VERSION" '.tags | index($v)' >/dev/null || magpie_ok=0
           curl -fsS -H "Authorization: Bearer $tok" "https://ghcr.io/v2/${OWNER}/magpie-fnos-bridge/tags/list" \
-            | jq -e --arg v "$FPK_VERSION" '.tags | index($v)' >/dev/null || ok=0
-          echo "exist=$ok" >>"$GITHUB_OUTPUT"
-          echo "images already published: $ok"
+            | jq -e --arg v "$FPK_VERSION" '.tags | index($v)' >/dev/null || bridge_ok=0
+          echo "magpie_exist=$magpie_ok" >>"$GITHUB_OUTPUT"
+          echo "bridge_exist=$bridge_ok" >>"$GITHUB_OUTPUT"
+          echo "magpie image published: $magpie_ok; bridge image published: $bridge_ok"
 
       - uses: docker/setup-qemu-action@v3
         if: steps.ver.outputs.exists == 'false'
@@ -90,7 +93,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push magpie image
-        if: steps.ver.outputs.exists == 'false' && steps.images.outputs.exist != '1'
+        if: steps.ver.outputs.exists == 'false' && steps.images.outputs.magpie_exist != '1'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -102,7 +105,7 @@ jobs:
             VERSION=${{ steps.ver.outputs.upstream }}
 
       - name: Build and push bridge image
-        if: steps.ver.outputs.exists == 'false' && steps.images.outputs.exist != '1'
+        if: steps.ver.outputs.exists == 'false' && steps.images.outputs.bridge_exist != '1'
         uses: docker/build-push-action@v6
         with:
           context: fnos/bridge
