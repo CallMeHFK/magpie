@@ -114,6 +114,12 @@ jobs:
       - name: Build the FPK
         if: steps.ver.outputs.exists == 'false'
         run: |
+          set -eu
+          # the bridge image follows the fpk version; rewrite the tag so the
+          # package always ships the image this release builds/skips for
+          sed -i "s#ghcr.io/callmehfk/magpie-fnos-bridge:[0-9.-]*#ghcr.io/callmehfk/magpie-fnos-bridge:${{ steps.ver.outputs.version }}#" \
+            fnos/app/app/docker/docker-compose.yaml
+          grep -q "magpie-fnos-bridge:${{ steps.ver.outputs.version }}" fnos/app/app/docker/docker-compose.yaml
           curl -fsSL -o /usr/local/bin/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
           chmod +x /usr/local/bin/fnpack
           cd fnos/app && fnpack build

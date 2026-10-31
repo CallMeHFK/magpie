@@ -39,7 +39,7 @@ services:
         exec /magpie serve --web=0.0.0.0:3430
 
   bridge:
-    image: ghcr.io/callmehfk/magpie-fnos-bridge:0.1.2242
+    image: ghcr.io/callmehfk/magpie-fnos-bridge:0.1.2242-6
     container_name: magpie-bridge
     restart: unless-stopped
     depends_on:
