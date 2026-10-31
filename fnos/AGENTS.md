@@ -52,9 +52,14 @@ A PR merges only after all three report on its tip.
 
 `upstream-sync.yml` (schedule + manual) does, on a `fnos/sync-*` branch:
 
-1. Read the tracked version from `fnos/UPSTREAM_VERSION`.
-2. `gh api repos/yetone/magpie/tags` — pick the newest `vX.Y.Z` newer than
-   tracked (semver; highest wins). Tags, not upstream `main`.
+1. Read the tracked version from `fnos/UPSTREAM_VERSION` and the update
+   channel from `fnos/UPDATE_CHANNEL`: `stable-<days>` (default `stable-7`)
+   follows only full releases published at least <days> ago — upstream
+   marks every build `prerelease=false`, so the soak window is the
+   stability signal; `latest` follows the newest full release. Drafts and
+   prereleases never pass in either mode.
+2. `gh api repos/yetone/magpie/releases` (paginated) — pick the newest
+   qualifying release tag newer than tracked (semver; highest wins).
 3. Merge that tag into `main`; in the same commit update
    `fnos/UPSTREAM_VERSION` and both `image:` tags in
    `app/app/docker/docker-compose.yaml` (`chore(fnos): track upstream

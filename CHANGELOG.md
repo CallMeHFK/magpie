@@ -4,6 +4,17 @@ All notable changes to the fnOS packaging in this fork. Upstream magpie
 changes are not duplicated here; each `fnos-vX.Y.Z` release names the
 upstream version it packages (see AGENTS/fnos release protocol).
 
+## [0.1.2242-10] - 2026-11-01
+
+### Added
+
+- Update channels (`fnos/UPDATE_CHANNEL`): `stable-<days>` (default
+  `stable-7`) tracks only full releases that have been out for at least
+  the soak window - upstream flags every build as a full release, so age
+  is the only stability signal - and `latest` tracks the newest one.
+  Verified against live data (1163 releases scanned, picks the newest
+  qualifying one).
+
 ## [0.1.2242-9] - 2026-10-31
 
 ### Fixed

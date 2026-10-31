@@ -30,12 +30,25 @@ jobs:
         run: |
           tracked="$(cat fnos/UPSTREAM_VERSION | tr -d '[:space:]')"
           echo "tracked: $tracked"
-          newest="$(gh api 'repos/yetone/magpie/tags?per_page=50' --jq '.[].name' \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sort -t. -k1,1n -k2,2n -k3,3n \
-            | tail -1)"
-          echo "newest upstream tag: ${newest:-none}"
-          if [ -z "$newest" ]; then
+          # update channel (fnos/UPDATE_CHANNEL): "stable-<days>" follows
+          # only full releases published at least <days> ago (a soak window
+          # - upstream tags every build stable, so age is the stability
+          # signal), "latest" follows the newest full release. Drafts and
+          # prereleases never pass.
+          channel="$(cat fnos/UPDATE_CHANNEL 2>/dev/null | tr -d '[:space:]')"
+          case "${channel:-stable-7}" in
+            latest)            soak_days=0 ;;
+            stable-*)          soak_days="${channel#stable-}" ;;
+            *)                 soak_days=7 ;;
+          esac
+          case "$soak_days" in ''|*[!0-9]*) soak_days=7 ;; esac
+          cutoff="$(date -u -d "-$soak_days days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-${soak_days}d +%Y-%m-%dT%H:%M:%SZ)"
+          echo "channel: ${channel:-stable-7} (soak $soak_days days, cutoff $cutoff)"
+          newest="$(gh api --paginate --slurp "repos/yetone/magpie/releases?per_page=100" \
+            | jq -r --arg cutoff "$cutoff" \
+              '[(.[][]) | select(.draft == false and .prerelease == false and .published_at != null and .published_at <= $cutoff)][0].tag_name')"
+          echo "newest qualifying upstream tag: ${newest:-none}"
+          if [ -z "$newest" ] || [ "$newest" = "null" ]; then
             echo "skip=true" >>"$GITHUB_OUTPUT"; exit 0
           fi
           latest="${newest#v}"
