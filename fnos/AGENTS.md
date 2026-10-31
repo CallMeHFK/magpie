@@ -14,6 +14,13 @@ Upstream `yetone/magpie` (AI gateway, Go, MIT) is packaged as a fnOS app:
   proxies to magpie web's one-port server (`:3430` in-container; page,
   `/api/*` and the `/v1`,`/v1beta`,`/mcp` client routes together)
 - `app/` — the fnpack project (manifest, lifecycle scripts, compose, icons)
+- Packaging facts verified on a live device: package contents extract to
+  the install target root (`${TRIM_APPDEST}` = the target itself, paths in
+  the compose file carry no `app/` prefix); the compose project is created
+  before lifecycle callbacks run; fnpack built on Windows drops the
+  executable bit (CI builds on Linux; local builds need a tar repack with
+  `0755` on `cmd/*` and `app/docker/bin/*`); the web key is negotiated at
+  container start (`/sock/magpie.env`), never host-side
 - `.github/workflows/` — CI, upstream sync, FPK release (see section below)
 
 Upstream code is not modified. The page shim (fetch-URL rewrite) is

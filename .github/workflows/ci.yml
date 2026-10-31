@@ -47,6 +47,11 @@ jobs:
           curl -fsSL -o fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
           chmod +x fnpack
           ./fnpack --help >/dev/null
+      - name: build bridge binaries
+        run: |
+          cd fnos/bridge
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../app/app/docker/bin/bridge-x86_64 .
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../app/app/docker/bin/bridge-aarch64 .
       - name: build fpk
         run: cd fnos/app && "$GITHUB_WORKSPACE/fnpack" build
       - name: verify fpk layout

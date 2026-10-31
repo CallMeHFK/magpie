@@ -14,7 +14,8 @@ fnOS desktop / 飞牛 App / browser
 fnOS 统一网关  https://<device>/app/magpie/*
    │  (Unix socket /var/apps/magpie/target/app.sock)
    ▼
-bridge  (fnos/bridge, a ~200-line Go adapter)
+bridge  (fnos/bridge, a ~250-line Go adapter, shipped as a static
+   │      binary inside the package and run on a stock shell image)
    │  strips /app/magpie, injects the web key cookie for
    │  fnOS-authenticated sessions, streams everything
    ▼
@@ -68,8 +69,9 @@ Works the same on the LAN: `https://<device>/app/magpie/v1`.
 cd fnos/app && fnpack build    # -> magpie.fpk
 ```
 
-CI publishes both container images (`magpie-fnos`, `magpie-fnos-bridge`)
-multi-arch (amd64 + arm64) on every tracked upstream release.
+CI publishes the magpie container image (multi-arch) when its tag is
+missing; the bridge ships inside the FPK as a static binary - no image
+builds, no registry dependency beyond the magpie image itself.
 
 ## Privacy & security notes
 

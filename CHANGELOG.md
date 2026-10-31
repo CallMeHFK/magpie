@@ -4,6 +4,20 @@ All notable changes to the fnOS packaging in this fork. Upstream magpie
 changes are not duplicated here; each `fnos-vX.Y.Z` release names the
 upstream version it packages (see AGENTS/fnos release protocol).
 
+## [0.1.2242-9] - 2026-10-31
+
+### Fixed
+
+- Live-device installs uncovered the real layout: the package contents
+  extract to the install target root (no `app/` prefix), and the compose
+  project is created before any lifecycle callback runs, so the web key
+  cannot be prepared host-side. The key is now negotiated between the
+  containers at start (bridge writes `${TRIM_APPDEST}/docker/magpie.env`,
+  the magpie entrypoint waits for it and sources it).
+- The bridge ships as a static binary inside the FPK (amd64 + arm64) and
+  runs on an image already present on the device - no second image to
+  build, publish or pull.
+
 ## [0.1.2242-3] - 2026-10-31
 
 ### Fixed
