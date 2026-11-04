@@ -4,6 +4,15 @@ All notable changes to the fnOS packaging in this fork. Upstream magpie
 changes are not duplicated here; each `fnos-vX.Y.Z` release names the
 upstream version it packages (see AGENTS/fnos release protocol).
 
+## [0.1.2989] - 2026-11-05
+
+### Changed
+
+- Track upstream [yetone/magpie v0.1.2989](https://github.com/yetone/magpie/releases/tag/v0.1.2989),
+  9 commits past v0.1.2980. The merge records v0.1.2989 as its second
+  parent and replays only the upstream delta, so the fork's fnOS overlay
+  remains unchanged.
+
 ## [0.1.2980] - 2026-11-05
 
 ### Changed
