@@ -34,6 +34,10 @@ type Option struct {
 	GroupIcon string `json:"groupIcon,omitempty"`
 	Ref       string `json:"ref,omitempty"`  // the catalog model, the same in every agent
 	Free      bool   `json:"free,omitempty"` // costs its subscription nothing
+	// Zero is a model its provider lists at $0 (provider.PricedFree), where
+	// Free is the vendor's own word: the picker says free by it too
+	// (jiangguochao666 on X)
+	Zero bool `json:"zero,omitempty"`
 	// Rate and RateWas are the credits a request costs its subscription,
 	// as a multiple, and before a discount running now (Qoder's 0.5×,
 	// WorkBuddy's x0.03), when its vendor lists them
@@ -314,6 +318,9 @@ type Agent struct {
 	// wslVersion is an agent in a WSL distro's CLI's version, as the
 	// distro's probe asked it (wslKind.version); "" when not asked
 	wslVersion string
+	// unreached, for an agent in a WSL distro, is why its folder there
+	// can't be opened: a link the distro couldn't resolve (distro.open)
+	unreached error
 	// move, when set, points the agent's config at to where it names the
 	// gateway at from: an address of WSL's that changed (#1013).
 	move func(from, to string) error
@@ -339,6 +346,18 @@ type Agent struct {
 	// that is dirShared: a file only the agent (or its own app) writes
 	// there (the Qoder app's status file, #2138).
 	sign func() bool
+	// binNot, when set, says whether a binary found for Bin is not this
+	// agent's: another program's launcher of the same name (VS Code's
+	// copilot launcher, #3269), which detection and the CLI's lookup are
+	// not to take for the agent.
+	binNot func(bin string) bool
+}
+
+// binsOwn says whether bin, as binAt or proc.FindTool found it, is the
+// agent's own command: binNot, when set, turns away what another program
+// puts there under the same name.
+func (a *Agent) binsOwn(bin string) bool {
+	return bin != "" && (a.binNot == nil || !a.binNot(bin))
 }
 
 // Running reports whether a process whose command line matches any pattern
@@ -402,7 +421,7 @@ func (a *Agent) Detected() bool {
 	if a.sign != nil && a.sign() {
 		return true
 	}
-	if a.Bin != "" && binAt(a.Bin) != "" {
+	if a.Bin != "" && a.binsOwn(binAt(a.Bin)) {
 		return true
 	}
 	// one with no Bin, as its command's name is other tools' too, that
@@ -612,9 +631,11 @@ func Detected() []*Agent {
 }
 
 // Find resolves a user-typed name (id, alias, or unique prefix).
-func Find(q string) (*Agent, error) {
+func Find(q string) (*Agent, error) { return FindIn(All(), q) }
+
+// FindIn is Find among all, a list of All() the caller has built already.
+func FindIn(all []*Agent, q string) (*Agent, error) {
 	q = strings.ToLower(strings.TrimSpace(q))
-	all := All()
 	var prefix []*Agent
 	for _, a := range all {
 		if strings.EqualFold(a.ID, q) { // codex@wsl:Ubuntu

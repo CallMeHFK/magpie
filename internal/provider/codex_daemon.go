@@ -164,12 +164,19 @@ const codexDaemonRecheck = 5 * time.Second
 
 // noteCodexSwitch remembers, when Codex's account changes from one to
 // another, the app-server left running on the one before.
-func noteCodexSwitch(from, to string) {
+func noteCodexSwitch(from, to string) { noteCodexSwitchBy(from, to, false) }
+
+// noteCodexSwitchBy is noteCodexSwitch, byMagpie saying magpie made the
+// switch by itself (switchLoginBy).
+func noteCodexSwitchBy(from, to string, byMagpie bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// the Codex app's app-servers are found and restarted on
-	// KeepCodexAppOnItsProvider's own look, whatever this listing finds
-	codexAppAccountSwitched()
+	// KeepCodexAppOnItsProvider's own look, whatever this listing finds.
+	// A switch by hand off an account known held is one off a used-up
+	// account, as SwitchWhenSpent's is: a turn left open on it when quota
+	// ran out mid-turn is restarted past once quiet (xiaoq6285 on Discord)
+	codexAppSwitched(codexHeldKnown(from), byMagpie)
 	ps, err := listProcesses(ctx)
 	known := err == nil
 	codexDaemonMu.Lock()
@@ -291,7 +298,10 @@ func DismissCodexApp() {
 // on Windows the Store app's (OpenAI.Codex, ChatGPT.exe), which copies its
 // codex out of WindowsApps and runs it from %LOCALAPPDATA%:
 // `C:\Users\…\AppData\Local\OpenAI\Codex\bin\<hash>\codex.exe -c … app-server
-// --analytics-default-enabled …` (26.1021 on the Windows box). Not the
+// --analytics-default-enabled …` (26.1021 on the Windows box); on Linux
+// the official app's (the chatgpt deb, rpm or Arch package, 26.1027):
+// `/usr/lib/chatgpt/resources/codex -c … app-server
+// --analytics-default-enabled …`. Not the
 // managed daemon, nor an app-server's helpers or proxy, nor an editor's
 // codex.
 func findCodexApp(ps []proc.Process) int {
@@ -312,7 +322,7 @@ func isCodexAppServer(args string) bool {
 	// the program's own path: ps leaves a path's spaces unquoted, so
 	// "…/Codex Computer Use.app/Contents/MacOS/…" reads as one named Codex
 	exe, rest := splitExe(args)
-	if !strings.Contains(exe, ".app/Contents/") && !windowsCodexApp(exe) {
+	if !strings.Contains(exe, ".app/Contents/") && !windowsCodexApp(exe) && !linuxCodexApp(exe) {
 		return false
 	}
 	if base := strings.ToLower(exe[strings.LastIndexAny(exe, `/\`)+1:]); base != "codex" && base != "codex.exe" {
@@ -329,6 +339,15 @@ func isCodexAppServer(args string) bool {
 func windowsCodexApp(exe string) bool {
 	e := strings.ToLower(exe)
 	return strings.Contains(e, `\appdata\local\openai\codex\bin\`) || strings.Contains(e, `\windowsapps\openai.`)
+}
+
+// linuxCodexApp is whether exe is the Linux Codex app's codex: the one in
+// its resources, /usr/lib/chatgpt/resources/codex in OpenAI's packages
+// (the deb's and the Arch package's, chatgpt 26.1027). Not a codex the
+// user installed (npm's, a release's): those run from a folder of their
+// own.
+func linuxCodexApp(exe string) bool {
+	return strings.HasPrefix(exe, "/") && strings.HasSuffix(exe, "/chatgpt/resources/codex")
 }
 
 // RestartCodexDaemon has Codex restart its app-server, which reads the
