@@ -4,6 +4,23 @@ All notable changes to the fnOS packaging in this fork. Upstream magpie
 changes are not duplicated here; each `fnos-vX.Y.Z` release names the
 upstream version it packages (see AGENTS/fnos release protocol).
 
+## [0.1.2965] - 2026-11-04
+
+### Changed
+
+- Track upstream [yetone/magpie v0.1.2965](https://github.com/yetone/magpie/releases/tag/v0.1.2965):
+  1,015 commits since v0.1.2242. The merge was clean — no conflict in
+  `fnos/` or in the fork's own workflows. `fnos/UPSTREAM_VERSION`, both
+  compose image tags and the FPK version now pin 0.1.2965.
+
+### Fixed
+
+- Recorded here from 0.1.2242-5/-6: the web key is negotiated between the
+  two containers at start (fnOS starts compose before the install callbacks
+  and does not export `TRIM_*` to them), `BRIDGE_AUTH_HEADER` defaults to
+  `X-Trim-Userid`, and a stale file at the socket path no longer blocks the
+  bridge from listening.
+
 ## [0.1.2242-10] - 2026-11-01
 
 ### Added

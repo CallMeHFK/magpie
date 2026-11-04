@@ -2,13 +2,16 @@ package provider
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,19 +42,22 @@ func stubCodexApp(t *testing.T) *codexAppStub {
 	t.Helper()
 	s := &codexAppStub{known: true, next: 100}
 	oldOn, oldList, oldEnd, oldTurn := CodexAppRoute, codexAppServersOn, endCodexAppServer, codexTurnRunning
-	oldOpen, oldReopen, oldQuiet := CodexAppOpen, CodexAppReopen, codexSessionsQuiet
+	oldOpen, oldReopen, oldQuiet, oldRestarts := CodexAppOpen, CodexAppReopen, codexSessionsQuiet, codexRestartsApp
 	reset := func() {
 		codexApp.Lock()
-		codexApp.seen, codexApp.route, codexApp.stale, codexApp.stuck, codexApp.switched = false, "", nil, false, false
-		codexApp.ended, codexApp.backBy, codexApp.spent = nil, time.Time{}, false
+		codexApp.seen, codexApp.route, codexApp.stale, codexApp.stuck, codexApp.switched, codexApp.auto = false, "", nil, false, false, false
+		codexApp.ended, codexApp.backBy, codexApp.spent, codexApp.why = nil, time.Time{}, false, ""
 		codexApp.Unlock()
 	}
 	t.Cleanup(func() {
 		CodexAppRoute, codexAppServersOn, endCodexAppServer, codexTurnRunning = oldOn, oldList, oldEnd, oldTurn
-		CodexAppOpen, CodexAppReopen, codexSessionsQuiet = oldOpen, oldReopen, oldQuiet
+		CodexAppOpen, CodexAppReopen, codexSessionsQuiet, codexRestartsApp = oldOpen, oldReopen, oldQuiet, oldRestarts
 		reset()
 	})
 	reset()
+	// the user asked magpie to restart the app for its own changes too
+	// (RestartApp); TestCodexAppLeftRunningForMagpiesOwnChanges is without
+	codexRestartsApp = func() bool { return true }
 	// the app as tests find it: open, and never reopened
 	CodexAppOpen = func(context.Context) (bool, bool) { return true, true }
 	CodexAppReopen = func(context.Context) error {
@@ -173,6 +179,54 @@ func TestCodexAppServerRestartedOnDisconnect(t *testing.T) {
 	s.route = "openai_base_url=http://127.0.0.1:3425/backend-api/codex" // connected again
 	if got := step(); !slices.Equal(got, []int{100}) {
 		t.Fatalf("connected again: ended %v, want [100]", got)
+	}
+}
+
+// Each end of the Codex app's app-server is logged with what made it
+// stale. The ChatGPT app can read the end as a crash (#4550), and the log
+// is what tells a used-up takeover, a route change and an account switch
+// apart in a user's report.
+func TestCodexAppEndSaysWhy(t *testing.T) {
+	signIn(t)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	now := time.Now()
+	idle := func() (int, time.Time) { return 0, now.Add(-time.Minute) }
+	step := func() []int { return codexAppStep(context.Background(), now, idle) }
+	said := func(want string) {
+		t.Helper()
+		got := buf.String()
+		buf.Reset()
+		if !strings.Contains(got, "ended the Codex app's app-server") || !strings.Contains(got, want) {
+			t.Fatalf("the log says %q, want the end and %q", got, want)
+		}
+	}
+
+	s := stubCodexApp(t)
+	s.running, s.on = []int{60}, true
+	if got := step(); !slices.Equal(got, []int{60}) {
+		t.Fatalf("first look on magpie: ended %v", got)
+	}
+	said("used up")
+	s.on = false
+	s.route = "openai_base_url="
+	if got := step(); !slices.Equal(got, []int{100}) {
+		t.Fatalf("the route changed: ended %v", got)
+	}
+	said("where Codex's config sends it changed")
+	codexApp.Lock()
+	codexApp.switched = true
+	codexApp.Unlock()
+	if got := step(); !slices.Equal(got, []int{101}) {
+		t.Fatalf("the account switched: ended %v", got)
+	}
+	said("account was switched")
+	if got := step(); got != nil {
+		t.Fatalf("nothing changed: ended %v", got)
+	}
+	if strings.Contains(buf.String(), "ended the Codex app's app-server") {
+		t.Fatalf("a look that ended nothing logged an end: %q", buf.String())
 	}
 }
 
@@ -500,6 +554,11 @@ func TestCodexOutUntil(t *testing.T) {
 // codexWindowsAppServer is the Windows Codex app's own app-server.
 const codexWindowsAppServer = `C:\Users\yeton\AppData\Local\OpenAI\Codex\bin\2993767bd1dfb009\codex.exe -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true`
 
+// codexLinuxAppServer is the Linux Codex app's own app-server, as the
+// official chatgpt 26.1027 deb ran it in the WSL distro magpie-desktop
+// (Ubuntu 24.04).
+const codexLinuxAppServer = "/usr/lib/chatgpt/resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true"
+
 // Only the app's own app-server is restarted: another program's, started
 // from the app's bundled codex with --listen (Miyi Helper's, seen on the
 // owner's Mac), is that program's.
@@ -510,6 +569,7 @@ func TestCodexAppOwnServer(t *testing.T) {
 		// as Windows listed it on the Windows box: run from LOCALAPPDATA,
 		// not from its package (zhibukaixinyao on Discord)
 		codexWindowsAppServer,
+		codexLinuxAppServer,
 	} {
 		if !isCodexAppOwnServer(own) {
 			t.Errorf("the app's own app-server not taken: %s", own)
@@ -523,6 +583,8 @@ func TestCodexAppOwnServer(t *testing.T) {
 		"/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex app-server --listen=ws://127.0.0.1:4500",
 		"/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex -c forced_login_method=\"chatgpt\" exec-server --remote https://codex-cloud-environments.chatgpt.com/api",
 		"/usr/local/bin/codex app-server",
+		"/usr/lib/chatgpt/resources/codex app-server --listen stdio://",
+		"/usr/lib/chatgpt/resources/codex exec-server --remote x",
 	} {
 		if isCodexAppOwnServer(other) {
 			t.Errorf("taken for the app's own app-server: %s", other)
@@ -897,6 +959,96 @@ func TestCodexAppServerRestartedPastATurnStuckOnTheSpentAccount(t *testing.T) {
 	}
 }
 
+// When magpie becomes Codex's provider for the used-up account, the Codex
+// app's app-server is on that account as a switch off it leaves it: a
+// turn left open when quota ran out mid-turn held the restart for up to
+// codexTurnWindow, and the app kept Send grey though another provider's
+// model was picked (xiaoq6285 on Discord). Past a quiet one it is
+// restarted, as after SwitchWhenSpent; a turn still writing, or sending
+// through magpie, holds it, and the way back at the reset waits for any
+// open turn as before.
+func TestCodexAppServerRestartedPastATurnStuckWhenMagpieTakesOver(t *testing.T) {
+	signIn(t)
+	s := stubCodexApp(t)
+	now := time.Now()
+	quiet := func() (int, time.Time) { return 0, now.Add(-codexTurnStuckAfter - time.Second) }
+	step := func(busy func() (int, time.Time)) []int { return codexAppStep(context.Background(), now, busy) }
+
+	s.running, s.turnOpen = []int{60}, true
+	if got := step(quiet); got != nil {
+		t.Fatalf("on its account with room: ended %v", got)
+	}
+	s.on = true // the account is out: magpie is Codex's provider
+	if got := step(func() (int, time.Time) { return 0, now.Add(-time.Minute) }); got != nil {
+		t.Fatalf("Codex's last request through magpie a minute ago: ended %v", got)
+	}
+	s.written = true
+	if got := step(quiet); got != nil {
+		t.Fatalf("the turn still writing to its session: ended %v", got)
+	}
+	s.written = false
+	if got := step(quiet); !slices.Equal(got, []int{60}) {
+		t.Fatalf("a turn stuck on the used-up account as magpie took over: ended %v, want [60]", got)
+	}
+	if got := step(quiet); got != nil {
+		t.Fatalf("the new app-server read magpie as it started: ended %v", got)
+	}
+	// the reset: back on the account, whose app-server may run a real turn
+	s.on = false
+	if got := step(quiet); got != nil {
+		t.Fatalf("back on the account with a turn open: ended %v", got)
+	}
+	s.turnOpen = false
+	if got := step(quiet); !slices.Equal(got, []int{100}) {
+		t.Fatalf("back on the account, idle: ended %v, want [100]", got)
+	}
+}
+
+// A switch by hand in magpie off an account the Codex app holds (used up)
+// is one off a used-up account, as SwitchWhenSpent's is: the app-server is
+// restarted past a turn left stuck on it (xiaoq6285 on Discord switched
+// accounts after Codex said the quota ran out, and Send stayed grey). A
+// switch off an account with room, or one never read, waits for an open
+// turn as before.
+func TestCodexHandSwitchOffAHeldAccountIsSpent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	stubCodexApp(t)
+	old := listProcesses
+	listProcesses = func(context.Context) ([]proc.Process, error) { return nil, nil }
+	loginUsageCache.Lock()
+	oldCache := loginUsageCache.m
+	loginUsageCache.m = map[string]loginUsageEntry{
+		"codex/out@x":  {at: time.Now(), q: SubscriptionQuota{Provider: "codex", User: "out@x", Held: true}},
+		"codex/room@x": {at: time.Now(), q: SubscriptionQuota{Provider: "codex", User: "room@x"}},
+		"codex/fail@x": {at: time.Now(), q: SubscriptionQuota{Provider: "codex", User: "fail@x", Held: true, Error: "fetch failed"}},
+	}
+	loginUsageCache.Unlock()
+	t.Cleanup(func() {
+		listProcesses = old
+		loginUsageCache.Lock()
+		loginUsageCache.m = oldCache
+		loginUsageCache.Unlock()
+		DismissCodexDaemon()
+		DismissCodexApp()
+	})
+	for _, c := range []struct {
+		from  string
+		spent bool
+	}{{"out@x", true}, {"OUT@x", true}, {"room@x", false}, {"fail@x", false}, {"never@x", false}} {
+		codexApp.Lock()
+		codexApp.switched, codexApp.spent = false, false
+		codexApp.Unlock()
+		noteCodexSwitch(c.from, "b@x")
+		codexApp.Lock()
+		switched, spent := codexApp.switched, codexApp.spent
+		codexApp.Unlock()
+		if !switched || spent != c.spent {
+			t.Errorf("switched off %s: switched %v, spent %v, want true, %v", c.from, switched, spent, c.spent)
+		}
+	}
+}
+
 // codexSessionsQuietFor reads the sessions' write times: a file written
 // within d is not quiet, an older one or none is, and a sessions folder
 // that can't be read is not.
@@ -923,5 +1075,90 @@ func TestCodexSessionsQuietFor(t *testing.T) {
 	}
 	if !codexSessionsQuietFor(home, now, time.Minute) {
 		t.Fatal("a session last written 5 minutes ago: not quiet")
+	}
+}
+
+// With both of Codex's sign-in ticks off magpie switches Codex's ChatGPT
+// account by itself (SwitchWhenSpent, and back once the first has room),
+// and becomes Codex's provider for a used-up account and gives it back.
+// Ending the Codex app's app-server makes the ChatGPT app show an error
+// and relaunch (#4550), which atom0964 on Discord could not turn off. The
+// changes the app works without (the switch back, the account given back
+// at the reset) leave it running unless the user ticked RestartApp. Those
+// that leave it on a used-up account restart it either way: the app
+// greys Send there for every model and reads the account only as its
+// app-server starts (8b0132b3d), so magpie's fallback could not serve it.
+// A switch the user makes, and a Connect or Disconnect, restart it too.
+func TestCodexAppLeftRunningForMagpiesOwnChanges(t *testing.T) {
+	signIn(t)
+	s := stubCodexApp(t)
+	restarts := false
+	codexRestartsApp = func() bool { return restarts }
+	now := time.Now()
+	idle := func() (int, time.Time) { return 0, now.Add(-time.Minute) }
+	step := func() []int { return codexAppStep(context.Background(), now, idle) }
+	none := func(what string) {
+		t.Helper()
+		for range 2 {
+			if got := step(); got != nil {
+				t.Fatalf("%s: ended %v", what, got)
+			}
+		}
+	}
+	ends := func(what string, want int) {
+		t.Helper()
+		if got := step(); !slices.Equal(got, []int{want}) {
+			t.Fatalf("%s: ended %v, want [%d]", what, got, want)
+		}
+		none("after " + what)
+	}
+
+	s.running = []int{60}
+	none("nothing changed")
+	codexAppSwitched(true, true)
+	ends("magpie switched off the used-up account", 60)
+	codexAppSwitched(false, true)
+	none("magpie switched back once the account had room")
+	s.on = true
+	ends("magpie became Codex's provider for the used-up account", 100)
+	s.on = false
+	none("magpie gave Codex back its account at the reset")
+
+	// a switch the user made, alone or after one of magpie's
+	codexAppSwitched(false, true)
+	codexAppAccountSwitched()
+	ends("switched by the user after magpie", 101)
+	codexAppAccountSwitched()
+	codexAppSwitched(false, true)
+	ends("switched by the user, then magpie", 102)
+	// a Connect: where Codex's config sends it changed, not by the takeover
+	s.route = "connected"
+	ends("connected", 103)
+
+	// ticked: magpie's changes the app works without restart it as well
+	restarts = true
+	codexAppSwitched(false, true)
+	ends("RestartApp on, magpie switched back", 104)
+	s.on = true
+	ends("RestartApp on, magpie took over", 105)
+	s.on = false
+	ends("RestartApp on, magpie gave the account back", 106)
+}
+
+// At magpie's first look, an app opened before it on a used-up account is
+// restarted at once with RestartApp off too: left on that account it greys
+// Send for every model, magpie's included.
+func TestCodexAppFirstLookOnAUsedUpAccountRestarts(t *testing.T) {
+	signIn(t)
+	s := stubCodexApp(t)
+	codexRestartsApp = func() bool { return false }
+	now := time.Now()
+	s.running, s.on = []int{60}, true
+	idle := func() (int, time.Time) { return 0, now.Add(-time.Minute) }
+	if got := codexAppStep(context.Background(), now, idle); !slices.Equal(got, []int{60}) {
+		t.Fatalf("first look on the used-up account: ended %v, want [60]", got)
+	}
+	if got := codexAppStep(context.Background(), now, idle); got != nil {
+		t.Fatalf("after the first look: ended %v", got)
 	}
 }

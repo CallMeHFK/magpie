@@ -68,7 +68,12 @@ type before struct {
 
 // verdict is what a classifier said.
 type verdict struct {
-	Intent string  // "" for none
+	Intent string // "" for none
+	// Said: the answer as it said it — a chat model's number, or the
+	// choice a decision model named — kept even when no intent came of
+	// it, so the trace tells "said none" from an answer the rules
+	// couldn't take (#4598)
+	Said   string
 	Effort string  // the reasoning the turn wants; "" when not asked
 	Score  float64 // how hard the classifier took the turn to be, from 0 (low) to 3 (xhigh)
 	Sure   float64 // how confident Jev was of the intent, from 0 to 1
@@ -387,35 +392,78 @@ func writePrior(b *strings.Builder, prev before) {
 var firstNumber = regexp.MustCompile(`\d+`)
 
 // readIntent is the intent a classifier's answer names: its first number,
-// 0 for none.
-func readIntent(answer string, intents []string) (string, error) {
+// 0 for none. The number is given back as it was said (said), so the
+// trace tells what a classifier that said none answered (#4598).
+func readIntent(answer string, intents []string) (string, string, error) {
 	n, err := strconv.Atoi(firstNumber.FindString(answer))
 	if err != nil || n < 0 || n > len(intents) {
 		a := []rune(strings.TrimSpace(answer))
 		if len(a) > 80 {
 			a = append(a[:80], '…')
 		}
-		return "", answerError{fmt.Errorf("it answered %q, not a number from 0 to %d", string(a), len(intents))}
+		return "", "", answerError{fmt.Errorf("it answered %q, not a number from 0 to %d", string(a), len(intents))}
 	}
+	said := strconv.Itoa(n)
 	if n == 0 {
-		return "", nil
+		return "", said, nil
 	}
-	return intents[n-1], nil
+	return intents[n-1], said, nil
 }
 
-// classifyEffort is the least reasoning model takes: none when it can go
-// without, else its lowest level; "" when its levels aren't known, which
-// leaves it to the vendor.
+// classifyEffort is the reasoning model is asked to classify at: none,
+// reasoning off, which each request fits to what its model and wire take
+// (tangtang969 on X: a classifier that doesn't think answers sooner).
+// Anthropic's API is sent thinking disabled and Gemini's its off budget,
+// or least level, where the lowest level on the model's list asked them to
+// think before; a Chat or Responses model without none is asked its
+// lowest (fitFor, effortOf), and one that turns off away is asked again at
+// its lowest and remembered (forwardTranslated, passthrough). A model
+// whose levels aren't known is asked for none too, as auto mode's
+// classifier is (fitAutoModeClassifier): left to its vendor, one that
+// reasons did so at its default. "" for a model the user said takes no
+// reasoning ask (Reasonless), and for one that isn't a provider's model (a
+// routing group), left to it.
 func classifyEffort(model string) string {
 	p, m, ok := provider.Resolve(model)
-	if !ok {
+	if !ok || provider.Reasonless(p.ID, m) {
 		return ""
 	}
-	levels := p.Efforts(m)
-	if len(levels) == 0 {
-		return ""
+	return "none"
+}
+
+// classifierEffortField is the classifier's effort (classifyEffort)
+// remembered in unfit for a model whose upstream turned the field away.
+func classifierEffortField(model string) string { return "classifier effort\x00" + model }
+
+// askLeast asks model the classifier's question, body at the effort
+// classifyEffort gives it. An upstream that turns the effort away — a
+// relay that knows no reasoning_effort, one that takes none of the
+// levels — is asked again without it, as before, and from then on: the
+// classifier answers wherever it did.
+func (s *Server) askLeast(wait time.Duration, model string, body func(effort string) []byte) (string, error) {
+	effort := classifyEffort(model)
+	p, m, ok := provider.Resolve(model)
+	if effort != "" && ok && !s.fits(p.ID, classifierEffortField(m), provider.Chat) {
+		effort = ""
 	}
-	return fitEffort("none", levels)
+	a, err := s.askChat(wait, model, body(effort))
+	var f chatFailed
+	if effort == "" || !errors.As(err, &f) {
+		return a, err
+	}
+	if refused, _ := ownEffortRefused(f.code, f.body, effort); !refused {
+		return a, err
+	}
+	s.markUnfit(p.ID, classifierEffortField(m), provider.Chat)
+	return s.askChat(wait, model, body(""))
+}
+
+// chatFailed is a classifier's answer that was an error, with its status
+// and body, for askLeast to read.
+type chatFailed struct {
+	error
+	code int
+	body []byte
 }
 
 // askWaited is the classifier a request's routing groups ask, each
@@ -472,8 +520,8 @@ func (s *Server) askClassifierIn(wait time.Duration, model string, intents []str
 		go func() {
 			defer wg.Done()
 			var a string
-			if a, ierr = s.askChat(wait, model, classifyBody(model, classifyEffort(model), intents, prev, text)); ierr == nil {
-				v.Intent, ierr = readIntent(a, intents)
+			if a, ierr = s.askLeast(wait, model, func(effort string) []byte { return classifyBody(model, effort, intents, prev, text) }); ierr == nil {
+				v.Intent, v.Said, ierr = readIntent(a, intents)
 			}
 		}()
 	}
@@ -482,7 +530,7 @@ func (s *Server) askClassifierIn(wait time.Duration, model string, intents []str
 		go func() {
 			defer wg.Done()
 			var a string
-			if a, eerr = s.askChat(wait, model, effortBody(model, classifyEffort(model), prev, text)); eerr == nil {
+			if a, eerr = s.askLeast(wait, model, func(effort string) []byte { return effortBody(model, effort, prev, text) }); eerr == nil {
 				v.Effort, v.Score, eerr = readEffort(a)
 			}
 		}()
@@ -586,7 +634,7 @@ func (s *Server) askChat(wait time.Duration, model string, body []byte) (string,
 		if out.Error != nil && out.Error.Message != "" {
 			msg = out.Error.Message
 		}
-		return "", fmt.Errorf("%s: %s", model, msg)
+		return "", chatFailed{fmt.Errorf("%s: %s", model, msg), w.Code, w.Body.Bytes()}
 	}
 	if len(out.Choices) == 0 {
 		return "", answerError{fmt.Errorf("%s gave no answer", model)}
