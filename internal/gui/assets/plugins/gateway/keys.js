@@ -201,6 +201,8 @@ function copyCallerKeyBtn(k) {
 }
 
 function renderGatewayKeys() {
+  // a drag in progress keeps its rows: the list is drawn when it ends
+  if (gatewayKeysArranging) { gatewayKeysRenderPending = true; return; }
   const box = $("#gatewayKeys");
   $("#gatewayKeysBlock").hidden = !providers?.gateway.lan;
   box.replaceChildren();
@@ -212,8 +214,10 @@ function renderGatewayKeys() {
     if (gatewayKeysErr) list.append(el("div", "none", t(gatewayKeysErr))), box.append(list);
     return;
   }
+  const rows = [];
   for (const k of gatewayKeys) {
     const row = el("div", "acc" + (k.off ? " off" : " in-use"));
+    rows.push(row);
     row.dataset.key = k.id;
     const tick = el("button", "dot tick");
     tick.title = t(k.off ? "Enable key" : "Disable key");
@@ -230,8 +234,62 @@ function renderGatewayKeys() {
   if (gatewayKeyDraft !== null) list.append(gatewayKeyForm());
   else if (!gatewayKeys.length) list.append(el("div", "none", t("No gateway keys yet")));
   box.append(list);
+  gatewayKeysArrange(list, rows);
   const page = gatewayKeyPage();
   if (page) box.append(page);
+}
+
+// gatewayKeysArrange: the keys are listed in the order the user puts them
+// in (alextjy on Discord), dragged by a row anywhere off its buttons, or
+// moved with Alt+↑/↓ on it, as the search APIs are (searchArrange); the
+// grip that says so shows on the row under the pointer. The order is kept
+// with the keys (move-key), so `magpie gateway-key list`, Connect's key
+// picker and the Requests page's key filter list them the same way. The
+// new order shows at once, and the list is read again when it can't be
+// saved.
+let gatewayKeysArranging = false, gatewayKeysRenderPending = false;
+function gatewayKeysArranged() {
+  gatewayKeysArranging = false;
+  if (gatewayKeysRenderPending) { gatewayKeysRenderPending = false; renderGatewayKeys(); }
+}
+function gatewayKeysArrange(list, rows) {
+  if (rows.length < 2) return;
+  list.classList.add("reorderable");
+  const move = async (row, to) => {
+    const from = rows.indexOf(row);
+    if (gatewayKeysBusy || to < 0 || to >= rows.length || to === from) return;
+    const id = row.dataset.key, focus = document.activeElement === row;
+    const next = [...gatewayKeys];
+    next.splice(to, 0, ...next.splice(from, 1));
+    gatewayKeys = next;
+    renderGatewayKeys();
+    const refocus = () => { if (focus) $(`#gatewayKeys .acc[data-key="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); };
+    refocus();
+    if (await gatewayKeyAction("move-key", { key: id, index: to })) status(t("Gateway key order saved"), "ok");
+    else await loadGatewayKeys(); // not saved: the order as it is kept
+    refocus();
+  };
+  for (const row of rows) {
+    const name = row.querySelector(".n")?.textContent || "";
+    row.tabIndex = 0;
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", name + " · " + t("Drag to reorder · Alt+↑/↓ to move"));
+    row.title = t("Drag to reorder · Alt+↑/↓ to move");
+    row.prepend(el("span", "grip"));
+    row.addEventListener("click", (e) => {
+      if (row.dataset.dragged) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+    row.onkeydown = (e) => {
+      if (e.target !== row || !e.altKey || !["ArrowUp", "ArrowDown"].includes(e.key) || gatewayKeysArranging) return;
+      e.preventDefault(); e.stopPropagation();
+      move(row, rows.indexOf(row) + (e.key === "ArrowUp" ? -1 : 1));
+    };
+    row.onpointerdown = (e) => {
+      if (gatewayKeysArranging || gatewayKeysBusy || e.target.closest("input, textarea, select, a, button, .key-limit-ed")) return;
+      gatewayKeysArranging = dragRows(e, row, row, list, rows, (to) => move(row, to), () => { closeProtoMenu(); closeAgentMenu(); },
+        gatewayKeysArranged);
+    };
+  }
 }
 
 // the key page (the gateway's /me): where a key's holder, with their key
@@ -239,7 +297,7 @@ function renderGatewayKeys() {
 // (zytszone on X: a department shares one magpie, whose app its people
 // can't be given). Its address is the one other machines reach.
 function gatewayKeyPage() {
-  const g = providers?.gateway, lan = g?.lanURLs || [];
+  const g = providers?.gateway, lan = gwFar(g);
   const at = g?.publicURL || (lan.includes(connectURL) ? connectURL : lan[0]);
   if (!at || !gatewayKeys?.length) return null;
   const url = at.replace(/\/+$/, "") + "/me";
@@ -298,6 +356,16 @@ function askGatewayKey(k, rotate) {
   ed.append(head, el("p", "lib-confirm", t(rotate
     ? "Clients using {name} will need the new key. Its name and usage history stay the same."
     : "Clients using {name} will lose access from other computers. Its usage history is kept.", { name: k.name })));
+  // a value of one's own in place of the one magpie makes (isaac_bai on
+  // Discord: one easy to remember and pass on)
+  let own = null;
+  if (rotate) {
+    own = input("", t("Your own key (optional)"), "password");
+    own.setAttribute("aria-label", t("Gateway key value"));
+    own.title = t("Leave empty and magpie makes a key. Or enter one your clients already send, from another gateway, so they keep working.");
+    own.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") go.click(); else if (e.key === "Escape") closeConfirmAsk(); };
+    ed.append(el("label", "", t("Gateway key")), own);
+  }
   const bar = el("div", "bar");
   const cancel = el("button", "text", t("Cancel"));
   cancel.onclick = (e) => { e.stopPropagation(); closeConfirmAsk(); };
@@ -306,10 +374,11 @@ function askGatewayKey(k, rotate) {
     e.stopPropagation();
     if (go.disabled) return;
     go.disabled = true;
-    const out = await gatewayKeyAction(rotate ? "rotate-key" : "remove-key", { key: k.id });
+    const mine = !!own?.value.trim();
+    const out = await gatewayKeyAction(rotate ? "rotate-key" : "remove-key", mine ? { key: k.id, secret: own.value } : { key: k.id });
     if (!out) { go.disabled = false; return; }
     closeConfirmAsk();
-    if (rotate) status(t("Gateway key rotated. Update clients on other computers."), "ok");
+    if (rotate) status(t(mine ? "Gateway key changed. Clients that send this key reach magpie now." : "Gateway key rotated. Update clients on other computers."), "ok");
   };
   bar.append(el("span", "grow"), cancel, go);
   ed.append(bar);
@@ -409,7 +478,11 @@ function gatewayModelsBadge(k) {
         seen.add(m.provider);
         opts.push({ v: m.provider + "/*", name: t("Every {provider} model", { provider: m.providerName }), note: m.provider + "/*", literalName: true });
       }
-      opts.push({ v: m.id, name: m.name, note: m.id, literalName: true });
+      // a decision model (Jev, Clef…) no agent lists: a routing group
+      // asks it whatever the key may use, and the key may ask it itself
+      // (/v1/systemone, another magpie's list) only when it is picked
+      // (Kautism on Discord)
+      opts.push({ v: m.id, name: m.name, note: m.decides ? m.id + " · " + t("Decision model: a routing group asks it whatever this key may use; pick it so the key may ask it itself") : m.id, literalName: true });
     }
     endBlock();
     // a provider with accounts and no model in the list (one kept

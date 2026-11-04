@@ -100,7 +100,7 @@ func keepLast(q SubscriptionQuota, user string) SubscriptionQuota {
 	if q.Provider == "claude" && claudeUsageDenied.MatchString(q.Error) {
 		return q
 	}
-	claudeUnavailable := q.Provider == "claude" && q.Error == errClaudeUsageUnavailable.Error()
+	claudeUnavailable := q.Provider == "claude" && claudeUsageUnknown.MatchString(q.Error)
 	if !claudeUnavailable && !passing.MatchString(q.Error) {
 		return q
 	}
@@ -118,6 +118,21 @@ func keepLast(q SubscriptionQuota, user string) SubscriptionQuota {
 		out.Name, out.Icon = c.m[key].Q.Name, c.m[key].Q.Icon
 	}
 	return out
+}
+
+// hadReading is whether a good reading of provider's account (or key
+// tag) user is kept: the account or key was read with windows or a
+// balance before.
+func hadReading(provider, user string) bool {
+	if provider == "" || user == "" {
+		return false
+	}
+	c := &lastQuotas
+	c.Lock()
+	defer c.Unlock()
+	c.load()
+	_, ok := c.m[provider+"/"+strings.ToLower(user)]
+	return ok
 }
 
 // readDeferred is whether err says no read was made this time (allowances

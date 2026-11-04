@@ -366,6 +366,18 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 	if l.Agent == "gemini" || l.Agent == "antigravity" {
 		return googleLoginQuota(ctx, l)
 	}
+	if l.Agent == ChatGPTAPIID {
+		// a ChatGPT plan through OpenAI's API (chatgpt_api.go): OpenAI
+		// tells its usage nowhere magpie can ask, only at SIWCUsageURL, so
+		// its row says so and what does show it, the account added as
+		// ChatGPT (danzi002 on Discord: accounts added through the API
+		// show no allowance, ones signed in as ChatGPT do). It used to be
+		// read below as a Codex account: a saved one said "chatgpt-api
+		// accounts can't be used side by side", the one in use read
+		// Codex's own sign-in ("Codex is signed out; run codex login", or
+		// another account's allowance under its name).
+		return SubscriptionQuota{Provider: l.Agent, Plan: l.Plan, Windows: []QuotaWindow{}, Error: siwcNoUsage, SeeAt: SIWCUsageURL}
+	}
 	if l.Agent == "copilot" {
 		for _, c := range copilotLogins(copilotConfigDir()) {
 			if strings.EqualFold(c.User, l.User) {
@@ -461,7 +473,9 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 // signed out as a revoked one is (signin_revoked.go): its row says Sign in
 // again, which runs magpie's sign-in for it and replaces its tokens, and
 // the gateway passes over it till then. A saved account's refused refresh
-// is marked lapsed already (savedRefreshFailed). A read that went through
+// is marked lapsed already (savedRefreshFailed), but not one Codex is
+// signed in to in another of its folders (codexHeldRefusal: charliepu's
+// C:\Users\…\.codex-db-backup-…), which is marked here. A read that went through
 // clears a mark it had. Anything else is unknown and marks nothing.
 func codexSignInRead(l Login, tok string, err error) error {
 	if err == nil {
@@ -469,7 +483,7 @@ func codexSignInRead(l Login, tok string, err error) error {
 		return nil
 	}
 	var refused refreshRefused
-	if !l.Active && errors.As(err, &refused) {
+	if !l.Active && errors.As(err, &refused) && !errors.As(err, new(codexHeldRefusal)) {
 		return err
 	}
 	m := bearerMark(codexGoneFor(err, tok, func() []byte { return codexLoginAuth(l) }))
@@ -554,6 +568,14 @@ func codexReadingHeld(u map[string]SubscriptionQuota) bool {
 		}
 	}
 	return false
+}
+
+// codexHeldKnown is whether user's ChatGPT account was held by the Codex
+// app (codexReadingHeld's held) at its last reading, asking no one; false
+// when it was never read or the read failed.
+func codexHeldKnown(user string) bool {
+	e, ok := loginReadingKnown(Login{Agent: "codex", User: user})
+	return ok && e.q.Error == "" && e.q.Held
 }
 
 // knownLoginUsage is LoginUsage over the readings already in hand, with

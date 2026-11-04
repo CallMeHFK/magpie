@@ -21,6 +21,7 @@ import (
 
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filelock"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -105,7 +106,26 @@ func ownSecret(secret string, keys []Key) (string, error) {
 			return "", errors.New("Another gateway key already has this key")
 		}
 	}
+	if upstreamKey(secret) {
+		return "", errors.New("This is one of your providers' API keys: give the gateway key a value of its own")
+	}
 	return secret, nil
+}
+
+// upstreamKey: secret is a key magpie sends a provider, which a gateway
+// key handed to others must never be.
+func upstreamKey(secret string) bool {
+	for _, p := range provider.All() {
+		if p.Key != "" && subtle.ConstantTimeCompare([]byte(secret), []byte(p.Key)) == 1 {
+			return true
+		}
+		for _, k := range p.Keys {
+			if k.Key != "" && subtle.ConstantTimeCompare([]byte(secret), []byte(k.Key)) == 1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type Key struct {
@@ -140,6 +160,15 @@ type Key struct {
 	// readOnlyRoutes and refuses it every other, every model, MCP and
 	// write route among them. Off, the key may do what its other limits let it.
 	ReadOnly bool `json:"readOnly,omitempty"`
+	// Expires is when the key stops working (an issued key, IssueKey);
+	// zero for one that doesn't. Prune removes it a while after.
+	Expires time.Time `json:"expires,omitzero"`
+	// Issuer is the id of the key it was issued under, which bounds it
+	// (issue.go); "" for one the user made or issued themselves.
+	Issuer string `json:"issuer,omitempty"`
+	// Issues lets the key issue short-lived keys under itself
+	// (POST /v1/magpie/keys); an issued key never can.
+	Issues bool `json:"issues,omitempty"`
 }
 
 // Identity is the gateway key a request came with, its budget, the
@@ -149,14 +178,32 @@ type Identity struct {
 	Limit          *Limit
 	More           []Limit
 	Models         []string
-	Accounts       []string
-	Quotas         bool
-	ReadOnly       bool
+	// AccountModels says Models are only HeldModels' "<provider>/*" of
+	// a key that names accounts and no model, nor does the key it was
+	// issued under: every model of those accounts' providers is the
+	// key's, a routing group of them alone too. A key that lists models
+	// is given a routing group of the user's only by naming it (kautism
+	// on Discord).
+	AccountModels bool
+	Accounts      []string
+	Quotas        bool
+	ReadOnly      bool
+	// Expires is when the key stops working, its issuer's expiry if
+	// sooner; zero for never.
+	Expires time.Time
+	// Issuer is the key it was issued under: its limits hold this key's
+	// requests too, and count what this key spends.
+	Issuer *Identity
+	// Issues: the key may issue keys under itself.
+	Issues bool
 	// Default: the key is the sharing key magpie made itself (Default),
 	// the one it writes into this computer's own agents that reach the
 	// gateway from beyond loopback, never one the user made for someone
 	// else.
 	Default bool
+	// Group is the routing group, by name, whose own accounts hold the
+	// request as well (HeldToGroup); "" when none does.
+	Group string
 }
 type contextKey struct{}
 
@@ -303,7 +350,8 @@ type Change struct {
 	// "reset-limit-key" resets (#2227), counted from 0: one past the last
 	// adds a limit, a nil Limit there removes that one. Without it,
 	// "limit-key" makes Limit the key's only limit, and "reset-limit-key"
-	// resets every one.
+	// resets every one. For "move-key" it is the place in the list the key
+	// goes to, counted from 0.
 	Index *int `json:"index,omitempty"`
 	// Models is what "models-key" sets; none lets the key use every model.
 	Models []string `json:"models,omitempty"`
@@ -315,9 +363,12 @@ type Change struct {
 	// ReadOnly is what "access-key" sets, and "add-key" gives the new key:
 	// it may read stats and use no model (Key.ReadOnly).
 	ReadOnly bool `json:"readOnly,omitempty"`
+	// Issues is what "issuer-key" sets: the key may issue short-lived
+	// keys under itself (Key.Issues).
+	Issues bool `json:"issues,omitempty"`
 	// Secret is the value "add-key" gives the new key, one its clients
-	// already send (love1sbug on X: keys handed out from another gateway);
-	// "" for one magpie makes.
+	// already send (love1sbug on X: keys handed out from another gateway),
+	// or "rotate-key" gives the key; "" for one magpie makes.
 	Secret string `json:"secret,omitempty"`
 }
 
@@ -368,11 +419,20 @@ func Update(action string, in Change) (string, error) {
 		}
 		switch action {
 		case "rotate-key":
-			token, err := random(24)
-			if err != nil {
-				return "", err
+			// a value of the user's own (isaac_bai on Discord: one easy to
+			// remember and pass on), checked as add-key's is; none, a new
+			// one magpie makes
+			if in.Secret != "" {
+				if secret, err = ownSecret(in.Secret, slices.Delete(slices.Clone(keys), i, i+1)); err != nil {
+					return "", err
+				}
+			} else {
+				token, err := random(24)
+				if err != nil {
+					return "", err
+				}
+				secret = Prefix + token
 			}
-			secret = Prefix + token
 			keys[i].Secret = secret
 		case "rename-key":
 			keys[i].Name = name
@@ -456,6 +516,12 @@ func Update(action string, in Change) (string, error) {
 			keys[i].Accounts = as
 		case "quotas-key":
 			keys[i].Quotas = in.Quotas
+		case "issuer-key":
+			// may issue short-lived keys under itself (POST /v1/magpie/keys)
+			if in.Issues && (keys[i].Issuer != "" || !keys[i].Expires.IsZero()) {
+				return "", errors.New("An issued key can't issue keys of its own: let a key of yours issue them")
+			}
+			keys[i].Issues = in.Issues
 		case "access-key":
 			// the sharing key is the one magpie gives its own agents (a
 			// WSL distro's under NAT, LANSecret): read-only, they could
@@ -473,12 +539,21 @@ func Update(action string, in Change) (string, error) {
 				mirror = &k
 			}
 			keys = slices.Delete(keys, i, i+1)
+		case "move-key":
+			// the keys are listed in the order they are kept in, which the
+			// user sets by dragging one (alextjy on Discord); nothing else
+			// about the key changes
+			if in.Index == nil || *in.Index < 0 || *in.Index >= len(keys) {
+				return "", errors.New("There is no such place in the list of keys")
+			}
+			k := keys[i]
+			keys = slices.Insert(slices.Delete(keys, i, i+1), *in.Index, k)
 		case "copy-key":
 			return keys[i].Secret, nil
 		default:
 			return "", fmt.Errorf("unknown key action %q", action)
 		}
-		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "quotas-key" && action != "access-key" {
+		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "quotas-key" && action != "access-key" && action != "issuer-key" && action != "move-key" {
 			mirror = &keys[i]
 		}
 	}
@@ -512,33 +587,12 @@ func setLegacyMirror(s *settings.Settings, k Key) error {
 	return nil
 }
 
-// Authenticate reloads the store so revocation takes effect in running gateways.
+// Authenticate reloads the store so revocation takes effect in running
+// gateways. An expired key, or one whose issuer no longer lets it in, is
+// refused as one turned off is; Check says why.
 func Authenticate(secret string) (Identity, bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	keys, err := load()
-	if err != nil || secret == "" {
-		return Identity{}, false
-	}
-	for _, k := range keys {
-		if subtle.ConstantTimeCompare([]byte(secret), []byte(k.Secret)) == 1 {
-			if k.Off {
-				return Identity{}, false
-			}
-			// the default key as Default tells it: marked LAN, or the id
-			// the settings name (settings read only for an unmarked key)
-			def := k.LAN || (settings.Load().LANKeyID == k.ID && k.ID != "")
-			return Identity{KeyID: k.ID, KeyName: k.Name, Limit: k.Limit, More: k.More, Models: HeldModels(k.Models, k.Accounts), Accounts: k.Accounts, Quotas: k.Quotas, ReadOnly: k.ReadOnly, Default: def}, true
-		}
-	}
-	s := settings.Load()
-	// A read-only config directory may prevent the first store write. Never
-	// fall back after either durable marker exists, or to a revoked mirror.
-	if s.LAN && s.LANKeyID == "" && s.LANKey != "" && !strings.HasPrefix(s.LANKey, revokedLANPrefix) && !slices.ContainsFunc(keys, func(k Key) bool { return k.LAN }) && subtle.ConstantTimeCompare([]byte(secret), []byte(s.LANKey)) == 1 {
-		k := legacyLANKey(s.LANKey)
-		return Identity{KeyID: k.ID, KeyName: k.Name, Default: true}, true
-	}
-	return Identity{}, false
+	who, err := Check(secret)
+	return who, err == nil
 }
 
 // On: the key with this id is one Authenticate takes, in the store and not
@@ -553,7 +607,13 @@ func On(id string) bool {
 	}
 	for _, k := range keys {
 		if k.ID == id {
-			return !k.Off && k.Secret != ""
+			// an issued key is on while it hasn't expired and its issuer
+			// lets it in, as Check takes it
+			if k.Off || k.Secret == "" || k.expired(Now()) {
+				return false
+			}
+			_, err := identityOf(k, keys, Now())
+			return err == nil
 		}
 	}
 	s := settings.Load()
