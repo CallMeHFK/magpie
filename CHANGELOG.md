@@ -21,6 +21,31 @@ upstream version it packages (see AGENTS/fnos release protocol).
   `X-Trim-Userid`, and a stale file at the socket path no longer blocks the
   bridge from listening.
 
+## [0.1.2242-10] - 2026-11-01
+
+### Added
+
+- Update channels (`fnos/UPDATE_CHANNEL`): `stable-<days>` (default
+  `stable-7`) tracks only full releases that have been out for at least
+  the soak window - upstream flags every build as a full release, so age
+  is the only stability signal - and `latest` tracks the newest one.
+  Verified against live data (1163 releases scanned, picks the newest
+  qualifying one).
+
+## [0.1.2242-9] - 2026-10-31
+
+### Fixed
+
+- Live-device installs uncovered the real layout: the package contents
+  extract to the install target root (no `app/` prefix), and the compose
+  project is created before any lifecycle callback runs, so the web key
+  cannot be prepared host-side. The key is now negotiated between the
+  containers at start (bridge writes `${TRIM_APPDEST}/docker/magpie.env`,
+  the magpie entrypoint waits for it and sources it).
+- The bridge ships as a static binary inside the FPK (amd64 + arm64) and
+  runs on an image already present on the device - no second image to
+  build, publish or pull.
+
 ## [0.1.2242-3] - 2026-10-31
 
 ### Fixed

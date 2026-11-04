@@ -146,6 +146,7 @@ func TestInjectsShimOnPageOnly(t *testing.T) {
 
 func TestLoadConfigValidation(t *testing.T) {
 	t.Setenv("BRIDGE_SOCKET", filepath.Join(t.TempDir(), "s.sock"))
+	t.Setenv("BRIDGE_KEY_FILE", filepath.Join(t.TempDir(), "magpie.env"))
 	t.Setenv("BRIDGE_PREFIX", "/app/magpie")
 	t.Setenv("BRIDGE_COOKIE_NAME", "c")
 	t.Setenv("BRIDGE_COOKIE_VALUE", "0123456789abcdef0123456789abcdef")
@@ -173,8 +174,19 @@ func TestLoadConfigValidation(t *testing.T) {
 	}
 }
 
+func TestKeyFileRequired(t *testing.T) {
+	t.Setenv("BRIDGE_SOCKET", filepath.Join(t.TempDir(), "s.sock"))
+	t.Setenv("BRIDGE_PREFIX", "/app/magpie")
+	t.Setenv("BRIDGE_UPSTREAM", "http://magpie:3430")
+	t.Setenv("BRIDGE_KEY_FILE", "")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("loadConfig without BRIDGE_KEY_FILE: got nil error, want the required-path error")
+	}
+}
+
 func TestCookieValueFallsBackToWebKey(t *testing.T) {
 	t.Setenv("BRIDGE_SOCKET", filepath.Join(t.TempDir(), "s.sock"))
+	t.Setenv("BRIDGE_KEY_FILE", filepath.Join(t.TempDir(), "magpie.env"))
 	t.Setenv("BRIDGE_UPSTREAM", "http://magpie:3430")
 	t.Setenv("BRIDGE_PREFIX", "/app/magpie")
 	t.Setenv("BRIDGE_COOKIE_NAME", "c")

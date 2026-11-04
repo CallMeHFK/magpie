@@ -24,6 +24,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -35,6 +36,7 @@ type config struct {
 	cookieName  string // BRIDGE_COOKIE_NAME, magpie web's key cookie
 	cookieValue string // BRIDGE_COOKIE_VALUE, MAGPIE_WEB_KEY
 	authHeader  string // BRIDGE_AUTH_HEADER, the fnOS gateway user header
+	keyFile     string // BRIDGE_KEY_FILE, the key file adopted when no env key is set
 	shimEnabled bool   // BRIDGE_FETCH_SHIM=1, rewrite absolute fetch URLs
 }
 
@@ -72,13 +74,12 @@ func loadConfig() (config, error) {
 	if c.cookieValue == "" {
 		c.cookieValue = os.Getenv("MAGPIE_WEB_KEY")
 	}
-	if c.cookieValue == "" {
-		if f := os.Getenv("BRIDGE_KEY_FILE"); f != "" {
-			if v, err := adoptKeyFile(f); err != nil {
-				log.Printf("bridge: key file %s: %v (continuing without cookie injection)", f, err)
-			} else if v != "" {
-				c.cookieValue = v
-			}
+	c.keyFile = os.Getenv("BRIDGE_KEY_FILE")
+	if c.cookieValue == "" && c.keyFile != "" {
+		if v, err := adoptKeyFile(c.keyFile); err != nil {
+			log.Printf("bridge: key file %s: %v (continuing without cookie injection)", c.keyFile, err)
+		} else if v != "" {
+			c.cookieValue = v
 		}
 	}
 	if c.cookieValue != "" && len(c.cookieValue) < 16 {
@@ -103,8 +104,35 @@ func loadConfig() (config, error) {
 	if !strings.HasPrefix(c.prefix, "/app/") || strings.HasSuffix(c.prefix, "/") {
 		return c, fmt.Errorf("bridge: BRIDGE_PREFIX must be /app/<appname>, got %q", c.prefix)
 	}
+	// Both paths are operator configuration (the app's compose file), but a
+	// malformed deployment should fail loudly at startup: the socket lives
+	// inside the app's own mounted directory, and the key file is written
+	// next to it - neither may escape that location via a relative or
+	// non-normalized path.
+	if _, err := cleanBridgePath("BRIDGE_SOCKET", c.socket); err != nil {
+		return c, err
+	}
+	if _, err := cleanBridgePath("BRIDGE_KEY_FILE", c.keyFile); err != nil {
+		return c, err
+	}
 	c.shimEnabled = os.Getenv("BRIDGE_FETCH_SHIM") == "1"
 	return c, nil
+}
+
+// cleanBridgePath validates an operator-provided POSIX filesystem path:
+// absolute and normalized (path.Clean is a no-op on it, which rules out
+// relative segments, duplicate separators and parent-directory walks).
+func cleanBridgePath(kind, p string) (string, error) {
+	if p == "" {
+		return "", fmt.Errorf("bridge: %s is required", kind)
+	}
+	if !strings.HasPrefix(p, "/") {
+		return "", fmt.Errorf("bridge: %s must be an absolute POSIX path, got %q", kind, p)
+	}
+	if path.Clean(p) != p {
+		return "", fmt.Errorf("bridge: %s must be a normalized path, got %q", kind, p)
+	}
+	return p, nil
 }
 
 // adoptKeyFile reads a KEY=VALUE env file and returns MAGPIE_WEB_KEY from

@@ -20,4 +20,4 @@ if [ ! -s "$KEY_FILE" ]; then
 fi
 
 # Best effort: the pinned image tags changed with the upgrade.
-docker compose -f "${TARGET}/app/docker/docker-compose.yaml" pull --ignore-pull-failures || true
+docker compose -f "${TARGET}/docker/docker-compose.yaml" pull --ignore-pull-failures || true
