@@ -423,8 +423,17 @@ func relistPicks(q *Provider, now map[string]bool) bool {
 	return true
 }
 
-// fetch is Fetch without the picks looked after.
+// fetch is Fetch without the picks looked after. A Remote magpie's list
+// also tells whether it is this magpie (noteSelf).
 func (p Provider) fetch(ctx context.Context) ([]catalog.Model, error) {
+	ms, err := p.fetchList(ctx)
+	if err == nil {
+		noteSelf(p, ms)
+	}
+	return ms, err
+}
+
+func (p Provider) fetchList(ctx context.Context) ([]catalog.Model, error) {
 	ctx = p.ownRequests(p.Via(ctx), probelog.KindList)
 	if p.DecideOnly() {
 		return p.fetchDecide(ctx)
@@ -1302,6 +1311,7 @@ func (p Provider) fetchPerKey(ctx context.Context, keys []KeyAccount) ([]catalog
 	old, _, _ := catalog.Live(p.ID)
 	old = append(old, catalog.LiveDrawers(p.ID)...)
 	old = append(old, catalog.LiveVideomakers(p.ID)...)
+	old = append(old, catalog.LiveServing(p.ID, "")...)
 	oldSides, _, _ := catalog.LiveSplit(p.ID)
 	var out []catalog.Model
 	var from [][]string // the bases that listed each model of out
@@ -3240,7 +3250,7 @@ func entryIn(entries []Entry, id string) (Entry, bool) {
 func Resolve(id string) (Provider, string, bool) {
 	// Claude Code's mark for a model with a 1M window; it drops it before
 	// asking, but a value in its settings still has it
-	id = strings.TrimSuffix(strings.TrimSpace(id), "[1m]")
+	id = ThroughSelf(strings.TrimSuffix(strings.TrimSpace(id), "[1m]"))
 	if IsGroupRef(id) {
 		// the groups' entries first: Catalog copies every entry, and was
 		// built for each group an agent's settings name (the window's drift
