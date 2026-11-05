@@ -1328,6 +1328,13 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// connection (regionFresh)
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
+	if status == http.StatusBadRequest && signatureRefused.Match(wordsOf(body)) {
+		// Google turned a thought signature away as one it didn't give
+		// (signatureRefused): the history's doing, not the account's. A
+		// group that moved from Vertex AI to AI Studio was refused on every
+		// account alike (mimi001234); none is set aside
+		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
 	if status == http.StatusBadGateway && bytes.Contains(body, []byte(openCodeBare)) {
 		// OpenCode's bare 400 (openCodeBareRefusal, #3740) is about the
 		// request, not the key: the key's other requests go through, so
@@ -2148,10 +2155,26 @@ type left struct {
 }
 
 // learns: c is a subscription whose allowance isn't known yet, of an agent
-// that tells it as it answers (Claude Code's rate_limit_event).
+// that tells it as it answers (Claude Code's rate_limit_event; a ChatGPT
+// account's x-codex-* headers, provider.NoteCodexLimits). A Codex account
+// only while it hasn't answered lately (codexAnswered): its reply makes it
+// known when it tells the week, and one that told nothing isn't sent
+// every request first. Not known and kept after those known, an account
+// whose usage can't be read was never sent one, under Use before expiry
+// (a whole week ahead of it) and Smart alike (peterpark8527 on Discord).
 func learns(c candidate, lefts map[allowanceKey]left) bool {
-	_, known := lefts[c.allowanceKey()]
-	return !known && c.p.Account != nil && c.p.Account.Agent == "claude"
+	if _, known := lefts[c.allowanceKey()]; known || c.p.Account == nil {
+		return false
+	}
+	switch c.p.Account.Agent {
+	case "claude":
+		return true
+	case "codex":
+		// only behind one known: of accounts none known, the order stands,
+		// and no week is started before it is needed
+		return len(lefts) > 0 && !codexAnsweredLately(c.p.Account.UsageAgent(), c.p.Account.User, time.Now())
+	}
+	return false
 }
 
 // weigh orders one provider's candidates as its routing says, and tells
