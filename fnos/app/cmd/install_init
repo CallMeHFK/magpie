@@ -1,5 +1,6 @@
 #!/bin/bash
 # Runs before the app files install. Nothing to do yet: the target
-# directory is not populated, and the key file is generated once the files
-# land (cmd/install_callback). Kept as a marker for the lifecycle.
+# directory is not populated, and the web key is negotiated between the
+# containers at first start (see the compose file). Kept as a marker for
+# the lifecycle.
 exit 0

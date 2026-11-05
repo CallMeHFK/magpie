@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -19,6 +21,7 @@ func testConfig(t *testing.T, upstreamURL string) (config, *url.URL) {
 		cookieName:  "magpie_web_3430",
 		cookieValue: "0123456789abcdef0123456789abcdef",
 		authHeader:  "X-Trim-Userid",
+		adminHeader: "X-Trim-Isadmin",
 		shimEnabled: true,
 	}
 	u, err := url.Parse(upstreamURL)
@@ -64,6 +67,7 @@ func TestStripsPrefixAndInjectsCookie(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/app/magpie/api/state", nil)
 	req.Header.Set("X-Trim-Userid", "1000")
+	req.Header.Set("X-Trim-Isadmin", "true")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -93,6 +97,56 @@ func TestNoCookieWithoutAuthHeader(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if gotCookie != "" {
 		t.Fatalf("cookie injected without the auth header: %q", gotCookie)
+	}
+}
+
+// The gateway vouches only that a session is signed in; the console changes
+// every account and gateway key, so the web key cookie is for an fnOS
+// administrator alone. A non-admin still gets the page - magpie's sign-in
+// form - but never the key.
+func TestCookieOnlyForAdmin(t *testing.T) {
+	cases := []struct {
+		name    string
+		user    string
+		admin   string
+		wantKey bool
+	}{
+		{"admin", "1000", "true", true},
+		{"admin upper case", "1000", "TRUE", true},
+		{"admin with padding", "1000", " true ", true},
+		{"not admin", "1000", "false", false},
+		{"no admin header", "1000", "", false},
+		{"garbage admin header", "1000", "yes", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotCookie string
+			up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+				if c, err := r.Cookie("magpie_web_3430"); err == nil {
+					gotCookie = c.Value
+				}
+			}))
+			defer up.Close()
+			cfg, u := testConfig(t, up.URL)
+			h := newBridge(cfg, u)
+
+			req := httptest.NewRequest("GET", "/app/magpie/", nil)
+			req.Header.Set("X-Trim-Userid", tc.user)
+			if tc.admin != "" {
+				req.Header.Set("X-Trim-Isadmin", tc.admin)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != 200 {
+				t.Fatalf("status: got %d, want the page for every signed-in user", rec.Code)
+			}
+			if tc.wantKey && gotCookie != "0123456789abcdef0123456789abcdef" {
+				t.Fatalf("cookie: got %q, want the web key for an administrator", gotCookie)
+			}
+			if !tc.wantKey && gotCookie != "" {
+				t.Fatalf("cookie: got %q, want none for a non-administrator", gotCookie)
+			}
+		})
 	}
 }
 
@@ -208,5 +262,107 @@ func TestCookieValueFallsBackToWebKey(t *testing.T) {
 	}
 	if cfg.cookieValue != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("cookie value: got %q, want the BRIDGE_COOKIE_VALUE override", cfg.cookieValue)
+	}
+}
+
+// Without an owner the key file keeps the plain mode the nonroot magpie
+// container reads through the shared mount.
+func TestKeyFileKeepsItsModeWithoutOwner(t *testing.T) {
+	// a tight umask must not turn the mode the reader needs into something
+	// else; the bridge sets it rather than inheriting it
+	defer syscall.Umask(syscall.Umask(0o077))
+	path := filepath.Join(t.TempDir(), "magpie.env")
+	key, err := adoptKeyFile(path, nil)
+	if err != nil {
+		t.Fatalf("adoptKeyFile: %v", err)
+	}
+	if len(key) != 32 {
+		t.Fatalf("key %q: want 32 hex characters", key)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o644 {
+		t.Fatalf("mode without an owner: got %o, want 644", got)
+	}
+}
+
+// With an owner the key is theirs alone, including a file an older bridge
+// wrote world readable.
+func TestKeyFileIsGivenToItsOwner(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("giving the key file to another uid needs root; run this test as root")
+	}
+	path := filepath.Join(t.TempDir(), "magpie.env")
+	if err := os.WriteFile(path, []byte("MAGPIE_WEB_KEY=0123456789abcdef0123456789abcdef\n"), 0o644); err != nil {
+		t.Fatalf("seed a world-readable key: %v", err)
+	}
+	owner := &keyOwner{uid: 65532, gid: 65532}
+	key, err := adoptKeyFile(path, owner)
+	if err != nil {
+		t.Fatalf("adoptKeyFile: %v", err)
+	}
+	if key != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("key: got %q, want the file's existing key", key)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode with an owner: got %o, want 600", got)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("stat: no Stat_t, got %T", fi.Sys())
+	}
+	if int(st.Uid) != owner.uid || int(st.Gid) != owner.gid {
+		t.Fatalf("owner: got %d:%d, want %d:%d", st.Uid, st.Gid, owner.uid, owner.gid)
+	}
+}
+
+func TestLoadKeyOwner(t *testing.T) {
+	cases := []struct {
+		name    string
+		uid     string
+		gid     string
+		wantNil bool
+		wantErr bool
+	}{
+		{"neither", "", "", true, false},
+		{"uid alone", "65532", "", false, true},
+		{"gid alone", "", "65532", false, true},
+		{"uid not a number", "magpie", "65532", false, true},
+		{"gid not a number", "65532", "magpie", false, true},
+		{"negative", "-1", "65532", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BRIDGE_KEY_UID", tc.uid)
+			t.Setenv("BRIDGE_KEY_GID", tc.gid)
+			owner, err := loadKeyOwner()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("loadKeyOwner(%q, %q): err=%v, wantErr=%v", tc.uid, tc.gid, err, tc.wantErr)
+			}
+			if tc.wantNil && owner != nil {
+				t.Fatalf("loadKeyOwner(%q, %q): got %+v, want nil", tc.uid, tc.gid, owner)
+			}
+		})
+	}
+
+	// both set and well formed: accepted only where the chown can happen
+	t.Setenv("BRIDGE_KEY_UID", "65532")
+	t.Setenv("BRIDGE_KEY_GID", "65532")
+	owner, err := loadKeyOwner()
+	if os.Geteuid() == 0 {
+		if err != nil {
+			t.Fatalf("loadKeyOwner as root: %v", err)
+		}
+		if owner == nil || owner.uid != 65532 || owner.gid != 65532 {
+			t.Fatalf("owner: got %+v, want 65532:65532", owner)
+		}
+	} else if err == nil {
+		t.Fatal("loadKeyOwner without root: got nil error, want the root requirement")
 	}
 }

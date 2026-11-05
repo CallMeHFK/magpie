@@ -8,10 +8,12 @@
 # in the app's own directory (wiped by an upgrade, regenerated at the next
 # container start - browsers then sign in once more).
 #
-# Network posture: neither container publishes a port. The only way in is
+# Network posture: the console has no port of its own. The only way in is
 # the fnOS unified gateway -> /var/apps/magpie/target/app.sock -> bridge ->
 # magpie web's one-port server (page, /api/* and the /v1,/v1beta,/mcp
-# gateway routes).
+# gateway routes). The one published port is magpie's model-gateway port
+# 3425, which LAN agents call directly; magpie demands a gateway key on
+# every non-loopback request to it.
 services:
   magpie:
     image: ghcr.io/callmehfk/magpie-fnos:0.1.3049
@@ -28,6 +30,12 @@ services:
     volumes:
       # read-only: the magpie container (nonroot) only reads the key file
       - ${TRIM_APPDEST}:/sock:ro
+      # magpie's own state - accounts, gateway keys, settings, the model
+      # catalog - under $HOME/XDG dirs inside /config. A named volume rather
+      # than the image's anonymous one: it keeps a stable name, so a
+      # stop/start or an upgrade comes back to the same data, and Docker
+      # seeds it from the image (uid 65532) on first use.
+      - magpie-config:/config
     entrypoint:
       - /bin/sh
       - -c
@@ -63,13 +71,22 @@ services:
       BRIDGE_PREFIX: /app/magpie
       BRIDGE_COOKIE_NAME: magpie_web_3430
       BRIDGE_AUTH_HEADER: X-Trim-Userid
+      BRIDGE_ADMIN_HEADER: X-Trim-Isadmin
       BRIDGE_KEY_FILE: /sock/magpie.env
+      # the magpie container reads the key as this uid (the image's
+      # nonroot); the bridge (root) hands the file to it with 0600 so no
+      # other app on the device can read it
+      BRIDGE_KEY_UID: "65532"
+      BRIDGE_KEY_GID: "65532"
       BRIDGE_FETCH_SHIM: "1"
     volumes:
       # The fnOS gateway connects to <target>/app.sock; the bridge (as the
       # container's root, matching the host-owned install dir) creates both
       # the socket and the key file here. Unauthenticated socket clients
       # only reach magpie's own sign-in page - the key cookie is injected
-      # for fnOS sessions alone.
+      # for fnOS administrator sessions alone.
       - ${TRIM_APPDEST}:/sock
       - ${TRIM_APPDEST}/docker/bin:/bin/bridge-dist:ro
+
+volumes:
+  magpie-config: {}
