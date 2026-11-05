@@ -4,7 +4,7 @@ All notable changes to the fnOS packaging in this fork. Upstream magpie
 changes are not duplicated here; each `fnos-vX.Y.Z` release names the
 upstream version it packages (see AGENTS/fnos release protocol).
 
-## [0.1.3049-1] - 2026-11-06
+## [0.1.3075-1] - 2026-11-06
 
 ### Changed
 
@@ -55,6 +55,19 @@ upstream version it packages (see AGENTS/fnos release protocol).
 - `fnpack build`, a real device install, and the unified-gateway path on
   hardware: no fnOS device or Docker in this checkout. See
   `fnos/PUBLISHING.md` for the checklist that covers them.
+
+## [0.1.3075] - 2026-11-06
+
+### Changed
+
+- Track upstream [yetone/magpie v0.1.3075](https://github.com/yetone/magpie/releases/tag/v0.1.3075),
+  51 commits past v0.1.3049. The merge was clean: the fork never modifies
+  upstream code, so nothing under `internal/` needed a resolution, and
+  `fnos/UPSTREAM_VERSION`, both compose image tags and the FPK version now
+  pin 0.1.3075.
+- One-off: the tracked channel stays `stable-7`. v0.1.3075 is inside the
+  soak window, so the scheduled sync would not have taken it; this catch-up
+  is deliberate and later syncs keep their own gate.
 
 ## [0.1.2989] - 2026-11-05
 
