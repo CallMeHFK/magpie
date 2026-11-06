@@ -16,7 +16,7 @@
 # every non-loopback request to it.
 services:
   magpie:
-    image: ghcr.io/callmehfk/magpie-fnos:0.1.3049
+    image: ghcr.io/callmehfk/magpie-fnos:0.1.3075
     container_name: magpie-app
     restart: unless-stopped
     environment:
@@ -56,7 +56,7 @@ services:
     # is only its shell holder - the same magpie image already on the
     # device (kept local: no registry pull at install time), running as
     # root so it can create the socket in the host-owned target directory
-    image: ghcr.io/callmehfk/magpie-fnos:0.1.3049
+    image: ghcr.io/callmehfk/magpie-fnos:0.1.3075
     user: "0:0"
     container_name: magpie-bridge
     restart: unless-stopped
