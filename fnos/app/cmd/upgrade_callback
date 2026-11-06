@@ -1,8 +1,10 @@
 #!/bin/bash
-# Runs after an upgrade replaced the app files. The upgrade wiped the key
-# file that lives inside the package directory; regenerate it (browsers
-# then sign in to magpie web once more), and pull the pinned images so the
-# restart after the upgrade serves the new version.
+# Runs after an upgrade replaced the app files. There is no key file to
+# restore: the bridge generates <target>/magpie.env at every container
+# start and hands it to the magpie container's uid, so an upgrade simply
+# makes browsers sign in to magpie web once more.
+# Pull the pinned images so the restart after the upgrade serves the new
+# version.
 set -eu
 . "$(dirname "$0")/common.sh"
 
@@ -10,14 +12,6 @@ TARGET="$(find_target)" || {
 	logger -t magpie-app "upgrade_callback: cannot locate the app target" 2>/dev/null
 	exit 1
 }
-
-KEY_FILE="${TARGET}/app/docker/magpie.env"
-
-if [ ! -s "$KEY_FILE" ]; then
-	KEY="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-	echo "MAGPIE_WEB_KEY=${KEY}" >"$KEY_FILE"
-	chmod 600 "$KEY_FILE"
-fi
 
 # Best effort: the pinned image tags changed with the upgrade.
 docker compose -f "${TARGET}/docker/docker-compose.yaml" pull --ignore-pull-failures || true

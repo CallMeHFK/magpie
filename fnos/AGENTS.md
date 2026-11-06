@@ -10,7 +10,8 @@ own code standards); for `fnos/` work, this file wins on packaging matters.
 Upstream `yetone/magpie` (AI gateway, Go, MIT) is packaged as a fnOS app:
 
 - `bridge/` — Go Unix-socket adapter: strips the `/app/magpie` gateway
-  prefix, injects magpie's web key cookie for fnOS-authenticated sessions,
+  prefix, injects magpie's web key cookie for fnOS administrator sessions
+  (`X-Trim-Isadmin: true`) alone,
   proxies to magpie web's one-port server (`:3430` in-container; page,
   `/api/*` and the `/v1`,`/v1beta`,`/mcp` client routes together)
 - `app/` — the fnpack project (manifest, lifecycle scripts, compose, icons)
@@ -44,6 +45,7 @@ injected at runtime by the bridge, so upstream merges stay conflict-free.
 | Package: build | `cd fnos/app && fnpack build` | fnpack 1.2.3 |
 | Package: inspect | `unzip -l magpie.fpk` | manifest + compose + cmd/* present |
 | Deploy test | `appcenter-cli install-fpk magpie.fpk` | real fnOS device; user guide: [FNOS.md](../FNOS.md) |
+| Publish | [PUBLISHING.md](PUBLISHING.md) | release material and the device tests 应用中心 asks for, each marked run or not run |
 
 CI check names (branch protection contexts): `lint`, `test`, `package`.
 A PR merges only after all three report on its tip.
@@ -74,10 +76,12 @@ notes, `CHANGELOG.md` records fork-side changes only.
 
 ## Secrets and privacy
 
-- `MAGPIE_WEB_KEY` is device-generated at install (`cmd/install_callback`,
-  backstopped by the other lifecycle callbacks) into
-  `${TRIM_APPDEST}/app/docker/magpie.env`, which the compose file reads via
-  `env_file`; upgrades regenerate it.
+- `MAGPIE_WEB_KEY` is negotiated between the two containers at start: the
+  bridge (root on the host-owned mount) reads or generates
+  `${TRIM_APPDEST}/magpie.env` and hands it to `BRIDGE_KEY_UID`/`BRIDGE_KEY_GID`
+  (the magpie image's nonroot, 65532) with mode `0600`, so no other app on
+  the device can read it; the magpie container's entrypoint waits for the
+  file and sources it. Nothing generates a key on the host any more.
   Never commit the file; `.gitignore` covers the local forms, and the
   pre-commit screen in the shared commit rules runs before every commit.
 - No real device hostnames, usernames, LAN IPs or tokens in the repo —

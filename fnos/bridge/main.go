@@ -1,8 +1,8 @@
 // Command bridge is the fnOS unified-gateway adapter for the magpie app
 // package. The fnOS gateway authenticates a session, then forwards
 // /app/magpie/* to a Unix socket this process listens on; the bridge strips
-// the gateway prefix, hands fnOS-authenticated browsers magpie's web key as
-// a cookie, and proxies everything to magpie web's one-port server (the
+// the gateway prefix, hands an fnOS administrator's browser magpie's web
+// key as a cookie, and proxies everything to magpie web's one-port server (the
 // page, its /api/* and the gateway client routes /v1, /v1beta, /mcp on the
 // same port).
 //
@@ -26,18 +26,31 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 type config struct {
-	socket      string // BRIDGE_SOCKET, the Unix socket to listen on
-	upstream    string // BRIDGE_UPSTREAM, the fixed http(s) URL to proxy to
-	prefix      string // BRIDGE_PREFIX, the gateway path prefix to strip
-	cookieName  string // BRIDGE_COOKIE_NAME, magpie web's key cookie
-	cookieValue string // BRIDGE_COOKIE_VALUE, MAGPIE_WEB_KEY
-	authHeader  string // BRIDGE_AUTH_HEADER, the fnOS gateway user header
-	keyFile     string // BRIDGE_KEY_FILE, the key file adopted when no env key is set
-	shimEnabled bool   // BRIDGE_FETCH_SHIM=1, rewrite absolute fetch URLs
+	socket      string    // BRIDGE_SOCKET, the Unix socket to listen on
+	upstream    string    // BRIDGE_UPSTREAM, the fixed http(s) URL to proxy to
+	prefix      string    // BRIDGE_PREFIX, the gateway path prefix to strip
+	cookieName  string    // BRIDGE_COOKIE_NAME, magpie web's key cookie
+	cookieValue string    // BRIDGE_COOKIE_VALUE, MAGPIE_WEB_KEY
+	authHeader  string    // BRIDGE_AUTH_HEADER, the fnOS gateway user header
+	adminHeader string    // BRIDGE_ADMIN_HEADER, the gateway's administrator flag
+	keyFile     string    // BRIDGE_KEY_FILE, the key file adopted when no env key is set
+	keyOwner    *keyOwner // BRIDGE_KEY_UID/BRIDGE_KEY_GID, owner of a key file this process writes
+	shimEnabled bool      // BRIDGE_FETCH_SHIM=1, rewrite absolute fetch URLs
+}
+
+// keyOwner is who a generated key file belongs to. The bridge runs as root
+// in the packaged compose file, but the magpie container reads the key as an
+// unprivileged user; handing the file to that user with 0600 is what keeps
+// it unreadable to everything else on the host.
+type keyOwner struct {
+	uid int
+	gid int
 }
 
 func loadConfig() (config, error) {
@@ -64,6 +77,15 @@ func loadConfig() (config, error) {
 	if c.authHeader == "" {
 		c.authHeader = "X-Trim-Userid"
 	}
+	// The gateway says whether that user is an administrator in this one; it
+	// is forwarded for every session, so a missing value means "no".
+	c.adminHeader = os.Getenv("BRIDGE_ADMIN_HEADER")
+	if c.adminHeader == "" {
+		c.adminHeader = "X-Trim-Isadmin"
+	}
+	if c.keyOwner, err = loadKeyOwner(); err != nil {
+		return c, err
+	}
 	// The web key comes in as MAGPIE_WEB_KEY or BRIDGE_COOKIE_VALUE (the
 	// magpie container sources the same key file); when neither is set, the
 	// bridge adopts BRIDGE_KEY_FILE: it reads the file, or generates it, so
@@ -76,7 +98,7 @@ func loadConfig() (config, error) {
 	}
 	c.keyFile = os.Getenv("BRIDGE_KEY_FILE")
 	if c.cookieValue == "" && c.keyFile != "" {
-		if v, err := adoptKeyFile(c.keyFile); err != nil {
+		if v, err := adoptKeyFile(c.keyFile, c.keyOwner); err != nil {
 			log.Printf("bridge: key file %s: %v (continuing without cookie injection)", c.keyFile, err)
 		} else if v != "" {
 			c.cookieValue = v
@@ -135,12 +157,63 @@ func cleanBridgePath(kind, p string) (string, error) {
 	return p, nil
 }
 
+// loadKeyOwner reads BRIDGE_KEY_UID and BRIDGE_KEY_GID, the owner a key file
+// this process writes is handed to. They go together; without them the file
+// keeps the uid this process runs as and is world readable (0644), which only
+// works where the mount is private to the two containers.
+func loadKeyOwner() (*keyOwner, error) {
+	uid, gid := os.Getenv("BRIDGE_KEY_UID"), os.Getenv("BRIDGE_KEY_GID")
+	if uid == "" && gid == "" {
+		return nil, nil
+	}
+	if uid == "" || gid == "" {
+		return nil, errors.New("bridge: BRIDGE_KEY_UID and BRIDGE_KEY_GID go together")
+	}
+	o := &keyOwner{}
+	var err error
+	if o.uid, err = strconv.Atoi(uid); err != nil || o.uid < 0 {
+		return nil, fmt.Errorf("bridge: BRIDGE_KEY_UID %q is not a user id", uid)
+	}
+	if o.gid, err = strconv.Atoi(gid); err != nil || o.gid < 0 {
+		return nil, fmt.Errorf("bridge: BRIDGE_KEY_GID %q is not a group id", gid)
+	}
+	// giving the file away is a privileged operation; saying so at startup
+	// beats a key the reader cannot open, with only a log line to show it
+	if os.Geteuid() != 0 {
+		return nil, errors.New("bridge: BRIDGE_KEY_UID needs the bridge to run as root")
+	}
+	return o, nil
+}
+
 // adoptKeyFile reads a KEY=VALUE env file and returns MAGPIE_WEB_KEY from
-// it; when the file is missing it is created with a fresh random key (the
-// file lives on the app's own directory, which the fnOS gateway host
-// already access-controls; 0644 so the nonroot magpie container can read
-// it through the shared mount).
-func adoptKeyFile(path string) (string, error) {
+// it; when the file is missing it is created with a fresh random key. The
+// file lives on the app's own directory, whose perms the fnOS gateway host
+// sets, and it is readable only by the user it is handed to (owner) so no
+// other app on the device can read the key. Without an owner - a deployment
+// where only the two containers share the mount - it stays 0644 for the
+// nonroot magpie container to read.
+func adoptKeyFile(path string, owner *keyOwner) (string, error) {
+	mode := os.FileMode(0o644)
+	if owner != nil {
+		mode = 0o600
+	}
+	key, err := readOrCreateKeyFile(path, mode)
+	if err != nil {
+		return "", err
+	}
+	if owner != nil {
+		// an older bridge wrote 0644; take it down on the next start
+		if err := os.Chmod(path, 0o600); err != nil {
+			return "", err
+		}
+		if err := os.Chown(path, owner.uid, owner.gid); err != nil {
+			return "", err
+		}
+	}
+	return key, nil
+}
+
+func readOrCreateKeyFile(path string, mode os.FileMode) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -151,7 +224,13 @@ func adoptKeyFile(path string) (string, error) {
 			return "", err
 		}
 		content := "MAGPIE_WEB_KEY=" + key + "\n"
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			return "", err
+		}
+		// WriteFile's mode is masked by the umask, and a reader on the other
+		// side of the mount cannot tell a tight umask from a missing key:
+		// set what this file is meant to be.
+		if err := os.Chmod(path, mode); err != nil {
 			return "", err
 		}
 		log.Printf("bridge: generated a new web key in %s", path)
@@ -201,6 +280,10 @@ window.fetch=function(input,init){
 // newBridge wires the config and the fixed upstream into the handler the
 // Unix socket serves.
 func newBridge(cfg config, upstream *url.URL) http.Handler {
+	// A non-admin page view is normal (the fnOS entry is admin-only, but a
+	// link can still be opened by anyone signed in), so say why the cookie
+	// is missing once instead of on every asset the page asks for.
+	var nonAdminOnce sync.Once
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(upstream)
@@ -262,13 +345,19 @@ func newBridge(cfg config, upstream *url.URL) http.Handler {
 			return
 		}
 		// fnOS has authenticated this browser's session; hand it magpie
-		// web's key cookie so the page opens without pasting the key.
-		// Requests without the fnOS header (none can reach the socket but
-		// through the gateway) keep magpie's own sign-in form.
-		if cfg.authHeader != "" && r.Header.Get(cfg.authHeader) != "" {
+		// web's key cookie so the page opens without pasting the key. The
+		// console changes every account, gateway key and route the device
+		// has: the gateway only vouches that someone is signed in, so the
+		// cookie goes to an administrator alone. Everyone else keeps
+		// magpie's own sign-in form, which they cannot pass without the key.
+		if cfg.sessionAdmin(r) {
 			if !hasCookie(r, cfg.cookieName) {
 				r.AddCookie(&http.Cookie{Name: cfg.cookieName, Value: cfg.cookieValue})
 			}
+		} else if cfg.sessionUser(r) {
+			nonAdminOnce.Do(func() {
+				log.Printf("bridge: user %s is not an fnOS administrator; magpie's web key is not injected for them", r.Header.Get(cfg.authHeader))
+			})
 		}
 		// The page route goes uncompressed so ModifyResponse can inject.
 		p := strings.TrimPrefix(r.URL.Path, cfg.prefix)
@@ -311,6 +400,22 @@ func hasCookie(r *http.Request, name string) bool {
 		}
 	}
 	return false
+}
+
+// sessionUser reports whether the gateway forwarded a signed-in user. None
+// but the gateway can reach the socket, so the header is the gateway's word.
+func (c config) sessionUser(r *http.Request) bool {
+	return c.authHeader != "" && r.Header.Get(c.authHeader) != ""
+}
+
+// sessionAdmin reports whether the gateway says that user is an
+// administrator. It sends X-Trim-Isadmin for every session, true or false,
+// so only a literal true counts - a missing header is not an administrator.
+func (c config) sessionAdmin(r *http.Request) bool {
+	if c.adminHeader == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get(c.adminHeader)), "true")
 }
 
 func serve(socket string, handler http.Handler) error {

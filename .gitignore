@@ -11,6 +11,7 @@
 # fnOS packaging (see fnos/AGENTS.md): local artifacts and secrets
 fnos/app/magpie.fpk
 fnos/app/app/docker/.env
+fnos/app/app/docker/magpie.env
 fnos/bridge/bridge
 fnos/bridge/bridge.exe
 
