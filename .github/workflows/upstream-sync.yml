@@ -9,10 +9,14 @@ on:
     - cron: "23 */6 * * *"
   workflow_dispatch:
 
+# `workflows` is not a GITHUB_TOKEN permission scope; listing it made the
+# whole file invalid for GitHub (runs appeared with the path as their name,
+# and failed with no jobs). The sync only changes fnos/UPSTREAM_VERSION,
+# the compose file and the manifest, so `contents` and `pull-requests` are
+# all it needs.
 permissions:
   contents: write
   pull-requests: write
-  workflows: write
 
 jobs:
   sync:
