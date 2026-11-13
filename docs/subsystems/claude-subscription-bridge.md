@@ -486,7 +486,21 @@ The provider keeps the account's last reading on that error
 (`claudeUsageUnknown`, as for Claude Code's own "temporarily
 unavailable"), and a panel with no figure otherwise is "Claude Code's
 /usage showed no usage figures: …", never "told no allowance", which is
-kept for an account Claude Code refuses (`claudeUsageDenied`).
+kept for an account Claude Code refuses (`claudeUsageDenied`, matched by
+`claudeDenied`, which drops "(not your usage limit)" and the request
+counts first). That error names the panel's own text from its tabs on,
+or its "Error: …" line (`usageWhy`, `usagePart`), never the banner and
+folder drawn above it. A panel drawn whole, with its Session tab and no
+error, loading or stale mark, that has no "Current session" or "Current
+week" is an account with no window started yet: Anthropic leaves a
+window out until the request that starts it. Its result is
+`NoUsageWindow`, and the card shows the five-hour window unused, with no
+error (`TestShimReadsUsageWithNoWindow`, `TestClaudeUsageNoWindowStarted`;
+koohoko5924 on Discord, a Claude Enterprise account, on panels built from
+2.1.316's strings, not captured). The Usage endpoint's own errors
+("temporarily limiting requests to the usage page", "rate limited
+until …") are failures as "Failed to load usage data" is
+(`TestShimToldWhyUsageFailed`).
 
 These one-off interactive runs (`askClaudeTUI`, `claudeUsageTUI`) work in
 magpie's shared work folder (`oneOffDir`: `claudeWorkDir`, a fresh temp
@@ -761,11 +775,27 @@ history to the 1h cache at 2×.
    sent `initialize` first, which Claude Code answers only once it has
    loaded the session; one that can't load it exits 1 ("No conversation
    found with session ID") without answering. `start` then lets the
-   session go and goes on to step 3 in the same request, logged "Claude
+   session go and goes on to step 4 in the same request, logged "Claude
    Code could not go on from the conversation's saved session". Before,
    the turn got 502 "Claude Code ended" with the safety context set, and
    an empty reply without it.
-3. `retire`, then a new run. In the interactive mode, a conversation
+3. `subscriptionBridge.retryBranch` when neither found the run: a turn
+   sent again while its run is still busy answering it (#5405,
+   margbug01) — the client's connection dropped mid-reply, the request
+   was retried, and no cancel reached magpie. A new Claude Code told the
+   whole conversation wrote it all to the cache again, only its own
+   system prompt and tools read from it: on a long conversation a short
+   network blip cost a full cache rewrite, on top of the attempt already
+   paid for and thrown away. The retry's run now resumes a copy of the
+   busy run's session, cut before the turn (`cutReply`, at `backLine`,
+   the line before the turn it was told), and is typed only the turn's
+   messages, so the history is read from the cache. The busy run is not
+   disturbed; `nil` when no busy run of the account is answering this
+   very turn (the request it heard is this one, message for message), the run was started for the turn (no
+   `backLine`), the session can't be copied, the client places its own
+   cache marks, or the run was taken back or is being taken back — the
+   turn told whole, as before.
+4. `retire`, then a new run. In the interactive mode, a conversation
    with a reply that calls no tool is given to the new Claude Code as
    its own transcript (`replaySession`, in `claude_replay.go`): a session
    file of two lines, a user line holding the conversation before that
@@ -931,7 +961,10 @@ A turn after a reply that starts a new run logs why none waited
 (`whyNoRun`, "claude: no run waits for this turn: …"): its run went on
 with a turn this one doesn't follow, waits under another key (the model,
 settings, system prompt or tools differ), waits at an earlier turn, is
-busy with another request, ended (how long ago, and why: `endWhy`, set by
+busy with another request (a turn whose run is busy answering the very
+turn sent again goes on from a copy of its session instead,
+`retryBranch`, so this line is not logged for one), ended (how long ago,
+and why: `endWhy`, set by
 `abortFor`, kept in `b.lost` by conversation), or no run here has had the
 conversation. Tool results that find no run waiting add what became of
 the run that made the calls ("the run that made the calls ended …",
